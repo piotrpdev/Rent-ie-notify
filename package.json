@@ -1,0 +1,36 @@
+{
+  "name": "rent-ie-notify",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scans rent.ie for new listings and uses a Discord webhook to notify you",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "env-cmd node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/piotrpdev/Rent-ie-notify.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/piotrpdev/Rent-ie-notify/issues"
+  },
+  "homepage": "https://github.com/piotrpdev/Rent-ie-notify#readme",
+  "devDependencies": {
+    "env-cmd": "^10.1.0",
+    "eslint": "^8.20.0",
+    "eslint-config-standard": "^17.0.0",
+    "eslint-plugin-import": "^2.26.0",
+    "eslint-plugin-n": "^15.2.4",
+    "eslint-plugin-promise": "^6.0.0"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0-rc.12",
+    "mongoose": "^6.4.6",
+    "node-fetch": "^3.2.9"
+  }
+}
