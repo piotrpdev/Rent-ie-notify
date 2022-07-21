@@ -27,9 +27,12 @@ if (newEntries) {
   // const URL = RENT_URL.split('/').slice(0, 4).join('/')
   // const linkedListings = newListings.map(({ id }) => URL + '/' + id)
 
-  console.log('Full list of new listings:')
   const linkedListings = newListings.map(({ id }) => data.find(entry => entry.id === id))
-  console.log(linkedListings)
+
+  if (!process.env.GITHUB_ACTIONS) {
+    console.log('Full list of new listings:')
+    console.log(linkedListings)
+  }
 
   await sendToDiscord(linkedListings)
 }
