@@ -11,7 +11,6 @@ if (testing) {
   data = waterfordData
 } else {
   data = await getRentData()
-  console.log(data)
 }
 
 const idList = data.map(entry => entry.id)
