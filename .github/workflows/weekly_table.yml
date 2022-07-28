@@ -5,8 +5,8 @@ name: Send new listings to Discord
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron:  '0 0,8-23 * * *'
+#  schedule:
+#    - cron:  '0 0,8-23 * * *'
 
 jobs:
   build:
