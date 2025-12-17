@@ -1,0 +1,21 @@
+[Unit]
+Description=Checks for new Rent.ie listings and posts them to a Slack webhook.
+After=network-online.target
+Wants=network-online.target
+
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=piotrpdev
+Group=piotrpdev
+WorkingDirectory=/home/piotrpdev/Rent-ie-notify/ 
+ExecStart=/home/piotrpdev/Rent-ie-notify/target/release/Rent-ie-notify
+Restart=on-failure
+RestartSec=5s
+Environment=RENT_IE_URL='https://www.rent.ie/rooms-to-rent/xxxx/xxxx/room-type_either/sort-by_date-entered_down/'
+Environment=SLACK_WEBHOOK_URL='https://hooks.slack.com/services/xxx/xxx/xxxxxx'
+
+[Install]
+WantedBy=multi-user.target
