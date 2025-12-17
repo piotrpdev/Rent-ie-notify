@@ -39,8 +39,8 @@ pub struct Accessory {
     pub alt_text: Option<String>,
 }
 
-impl From<&[RentListing]> for WebhookPayload {
-    fn from(listings: &[RentListing]) -> Self {
+impl From<&[&RentListing]> for WebhookPayload {
+    fn from(listings: &[&RentListing]) -> Self {
         let blocks: Vec<Block> = listings
             .iter()
             .enumerate()
@@ -89,7 +89,7 @@ impl From<&[RentListing]> for WebhookPayload {
     }
 }
 
-pub(crate) fn listings_to_slack_message_json(listings: &Vec<RentListing>) -> String {
+pub(crate) fn listings_to_slack_message_json(listings: &Vec<&RentListing>) -> String {
     let message: WebhookPayload = listings.as_slice().into();
     message.serialize_json()
 }

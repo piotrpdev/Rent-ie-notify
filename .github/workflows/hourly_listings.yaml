@@ -1,0 +1,39 @@
+name: 'Hourly Listings'
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0,8-23 * * *'
+
+concurrency: production
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sent_ids.txt
+          path: sent_ids.txt
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo run --locked --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sent_ids.txt
+          path: sent_ids.txt
+        

@@ -21,7 +21,7 @@ pub(crate) static SELECTORS: LazyLock<Selectors> = LazyLock::new(|| Selectors {
     description: Selector::parse("div:has(> .sresult_available_from)").unwrap(),
 });
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RentListing {
     pub(crate) id: String,
     pub(crate) link: String,
