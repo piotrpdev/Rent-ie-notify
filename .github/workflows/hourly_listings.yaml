@@ -2,8 +2,8 @@ name: 'Hourly Listings'
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0,8-23 * * *'
+  # schedule:
+  #   - cron: '0 0,8-23 * * *'
 
 concurrency: production
 
