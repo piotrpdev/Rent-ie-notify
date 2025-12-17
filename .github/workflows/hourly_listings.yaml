@@ -18,7 +18,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - name: Download sent_ids.txt artifact
+        uses: actions/download-artifact@v7
+        continue-on-error: true
         with:
           name: sent_ids.txt
           path: sent_ids.txt
@@ -32,7 +34,8 @@ jobs:
       - name: Build
         run: cargo run --locked --release
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload sent_ids.txt artifact
+        uses: actions/upload-artifact@v6
         with:
           name: sent_ids.txt
           path: sent_ids.txt
