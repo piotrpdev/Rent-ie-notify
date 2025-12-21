@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 minreq = { version = "2.14.1", default-features = false, features = [ "https" ] }
 nanoserde = { version = "0.2.1", default-features = false, features = [ "std", "json" ] }
-scraper = { version = "0.25.0", default-features = false }
+tl = { version = "0.7.8", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"

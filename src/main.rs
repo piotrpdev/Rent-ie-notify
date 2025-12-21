@@ -19,18 +19,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to read response body: {e}"))?;
 
     println!("Extracting listings from response HTML...");
-    let listings = rent_ie::extract_listings_from_html(html_response);
+    let listings_result = rent_ie::extract_listings_from_html(html_response);
+
+    let Ok(listings) = listings_result else {
+        return Err(format!(
+            "Failed to extract listings from HTML: {}",
+            listings_result.err().unwrap_or_default()
+        )
+        .into());
+    };
 
     println!("Loading already sent listing IDs from file...");
-    let sent_ids = std::fs::read_to_string(SENT_IDS_FILENAME).map_or_else(|_| {
-        eprintln!("{SENT_IDS_FILENAME} not found, assuming no listings have been sent yet.");
-        Vec::new()
-    }, |content| content.lines().map(ToString::to_string).collect());
+    let sent_ids = std::fs::read_to_string(SENT_IDS_FILENAME).map_or_else(
+        |_| {
+            eprintln!("{SENT_IDS_FILENAME} not found, assuming no listings have been sent yet.");
+            Vec::new()
+        },
+        |content| content.lines().map(ToString::to_string).collect(),
+    );
 
     println!("Filtering out already sent listings...");
-    let filtered_listings = listings.iter().filter(|listing| {
-        !sent_ids.contains(&listing.id)
-    }).collect();
+    let filtered_listings = listings
+        .iter()
+        .filter(|listing| !sent_ids.contains(&listing.id))
+        .collect();
 
     println!("Preparing Slack message...");
     let slack_message_json = slack::listings_to_slack_message_json(&filtered_listings);
