@@ -14,6 +14,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let response = minreq::get(rent_ie_url)
         .send()
         .map_err(|e| format!("Failed to fetch rent.ie listings: {e}"))?;
+
+    if response.status_code != 200 {
+        return Err(format!(
+            "Failed to fetch rent.ie listings: received status code {}. Cloudflare may be blocking the request, try from a residential IP?",
+            response.status_code,
+        )
+        .into());
+    }
+
     let html_response = response
         .as_str()
         .map_err(|e| format!("Failed to read response body: {e}"))?;
