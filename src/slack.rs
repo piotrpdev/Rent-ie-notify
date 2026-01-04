@@ -52,7 +52,7 @@ impl From<&[&RentListing]> for WebhookPayload {
                     text: Some(TextObject {
                         text_type: "mrkdwn".to_string(),
                         text: format!(
-                            "*<{}|{}>*\n{}\n*Price:* {}\n*Available from:* {}",
+                            "*<{}|{}>*\n{}\n*Price:* {}\n*Posted:* {}",
                             listing.link,
                             listing.address,
                             listing.description,

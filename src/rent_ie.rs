@@ -1,4 +1,4 @@
-use tl::{HTMLTag, Node, ParserOptions, VDom};
+use tl::{HTMLTag, Node, NodeHandle, ParserOptions, VDom};
 
 // Note, descdendent selectors aren't implemented in tl: https://github.com/y21/tl/issues/22
 const RESULT_SELECTOR: &str = "div.search_result";
@@ -30,7 +30,7 @@ fn get_tag_attr_value(tag: &HTMLTag, name: &str) -> Option<String> {
 }
 
 #[inline]
-fn find_description_string(node_handle: tl::NodeHandle, dom: &VDom) -> Option<String> {
+fn find_description_string(node_handle: NodeHandle, dom: &VDom) -> Option<String> {
     let node = node_handle.get(dom.parser())?;
 
     let raw_bytes = match node {
