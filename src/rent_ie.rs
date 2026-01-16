@@ -59,7 +59,7 @@ impl RentListing {
                 .and_then(Node::as_tag);
 
             let img_url = img
-                .and_then(|t| get_tag_attr_value(t, "src"))
+                .and_then(|t| get_tag_attr_value(t, "data-original"))
                 .unwrap_or_default();
             let address = img
                 .and_then(|t| get_tag_attr_value(t, "alt"))
