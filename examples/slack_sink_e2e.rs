@@ -34,10 +34,12 @@ Options:
   --daft-request JSON         daft.ie gateway JSON request body
   --daft-request-file PATH    read the daft.ie request body from a file
   --binary PATH               binary under test
+  --with-routing              forward OPENROUTESERVICE_API_KEY to enable ORS calls
   -h, --help                  show this help
 
 Defaults come from RENT_IE_URL and DAFT_IE_REQUEST.
-At least one source must be configured.
+At least one source must be configured. OpenRouteService is disabled unless
+--with-routing is passed, so test runs do not consume map API requests.
 ";
 
 #[derive(Debug, DeJson)]
@@ -55,6 +57,7 @@ struct Config {
     binary: PathBuf,
     rent_url: Option<String>,
     daft_request: Option<String>,
+    with_routing: bool,
 }
 
 fn default_binary() -> Result<PathBuf, Box<dyn Error>> {
@@ -78,6 +81,7 @@ fn parse_args() -> Result<Option<Config>, Box<dyn Error>> {
     let mut daft_request = env::var("DAFT_IE_REQUEST")
         .ok()
         .filter(|value| !value.trim().is_empty());
+    let mut with_routing = false;
     let mut args = env::args().skip(1);
 
     while let Some(argument) = args.next() {
@@ -109,6 +113,7 @@ fn parse_args() -> Result<Option<Config>, Box<dyn Error>> {
                     .map_err(|error| format!("failed to read {path}: {error}"))?;
                 daft_request = Some(body.trim().to_string());
             }
+            "--with-routing" => with_routing = true,
             other => return Err(format!("unknown argument: {other}").into()),
         }
     }
@@ -125,6 +130,7 @@ fn parse_args() -> Result<Option<Config>, Box<dyn Error>> {
         binary,
         rent_url,
         daft_request,
+        with_routing,
     }))
 }
 
@@ -186,6 +192,17 @@ fn run() -> Result<bool, Box<dyn Error>> {
         );
     }
 
+    let routing_api_key = if config.with_routing {
+        Some(
+            env::var("OPENROUTESERVICE_API_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or("--with-routing requires OPENROUTESERVICE_API_KEY")?,
+        )
+    } else {
+        None
+    };
+
     let received = Arc::new(Mutex::new(Vec::new()));
     let shutdown = Arc::new(AtomicBool::new(false));
     let (port, server_thread) = run_slack_sink(&received, &shutdown)?;
@@ -199,13 +216,17 @@ fn run() -> Result<bool, Box<dyn Error>> {
             format!("http://127.0.0.1:{port}/webhook"),
         )
         .env_remove("RENT_IE_URL")
-        .env_remove("DAFT_IE_REQUEST");
+        .env_remove("DAFT_IE_REQUEST")
+        .env_remove("OPENROUTESERVICE_API_KEY");
 
     if let Some(rent_url) = &config.rent_url {
         command.env("RENT_IE_URL", rent_url);
     }
     if let Some(daft_request) = &config.daft_request {
         command.env("DAFT_IE_REQUEST", daft_request);
+    }
+    if let Some(api_key) = &routing_api_key {
+        command.env("OPENROUTESERVICE_API_KEY", api_key);
     }
 
     let output = command.output()?;

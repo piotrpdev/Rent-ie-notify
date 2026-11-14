@@ -7,6 +7,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 - `src/main.rs` — orchestration: env vars, source fetching, grouping, dedupe, Slack POST, state file.
 - `src/listing.rs` — shared `Listing` model, coordinates, image-key extraction, and description/date formatting.
 - `src/places.rs` — parses `PLACES_OF_INTEREST`, computes haversine distances, and formats them for Slack.
+- `src/routing.rs` — batched OpenRouteService `driving-car` Matrix requests for drive time/distance, with straight-line fallback.
 - `src/dedupe.rs` — groups listings across sources by shared numeric ID or intersecting image keys.
 - `src/rent_ie.rs` — builds the rent.ie `_next/data` search API URL from `__NEXT_DATA__.page`/`query` and parses the API JSON; `tl` locates the metadata script, `nanoserde` parses JSON.
 - `src/daft_ie.rs` — parses daft.ie gateway API responses; links use `https://www.daft.ie<seoFriendlyPath>`.
@@ -19,12 +20,12 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 
 ## Commands
 
-- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (21 unit tests, plus 3 ignored archive-backed tests).
+- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (23 unit tests, plus 3 ignored archive-backed tests).
 - Check everything: `scripts/check.sh` (also runs the archive tests and release build).
 - Archive check: `cargo test --locked -- --ignored` (parses the rent.ie and daft.ie fixtures in `archives/`).
-- Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too.
+- Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.
 - Build: `cargo build --release` → `target/release/Rent-ie-notify`.
-- Run from the repo root with `SLACK_WEBHOOK_URL` and at least one of `RENT_IE_URL` or `DAFT_IE_REQUEST` set. Optional `PLACES_OF_INTEREST` adds distance lines.
+- Run from the repo root with `SLACK_WEBHOOK_URL` and at least one of `RENT_IE_URL` or `DAFT_IE_REQUEST` set. Optional `PLACES_OF_INTEREST` adds distance lines; optional `OPENROUTESERVICE_API_KEY` enables driving times/distances.
 - CI pins Rust 1.92.0 (workflow); locally installed toolchains may be newer, so avoid APIs newer than that.
 
 ## Gotchas
@@ -43,9 +44,9 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 - Search API `publishDate` is epoch milliseconds and is converted to a UTC `YYYY-MM-DD` date.
 - `PLACES_OF_INTEREST` is an optional JSON array:
   `[{"name":"Work","latitude":52.244898,"longitude":-7.159315}]`.
-  Slack shows straight-line distances from the listing's media/API location. Only daft.ie search results currently include coordinates; the dedupe representative borrows them from the daft.ie group member. Listings with no coordinates (including rent-only listings) omit the distance line.
-- `RENT_IE_URL`/`SLACK_WEBHOOK_URL` are secrets: `check_rent_ie.service` holds placeholders, and untracked `.vscode/launch.json` holds concrete values. Never copy either into tracked files, docs, or logs. `PLACES_OF_INTEREST` and `DAFT_IE_REQUEST` are configuration, not secrets.
+  Slack shows straight-line distances from the listing's media/API location when no ORS data is available. Only daft.ie search results currently include coordinates; the dedupe representative borrows them from the daft.ie group member. Listings with no coordinates (including rent-only listings) omit the distance line.
+- `OPENROUTESERVICE_API_KEY` enables the `driving-car` matrix profile. Requests are batched (40 origins max), request both duration and distance, and any API failure/limit falls back to straight-line distances. ORS uses OSM profile speeds, not live traffic.
+- `RENT_IE_URL`/`SLACK_WEBHOOK_URL`/`OPENROUTESERVICE_API_KEY` are secrets: `check_rent_ie.service` holds placeholders, and untracked `.vscode/launch.json` holds concrete values. Never copy them into tracked files, docs, or logs. `PLACES_OF_INTEREST` and `DAFT_IE_REQUEST` are configuration, not secrets.
 - A 403 from rent.ie or daft.ie is likely Cloudflare; the rent.ie error in `main.rs` suggests retrying from a residential IP.
 - `Cargo.toml` forbids `unsafe_code` and denies clippy `unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `todo`, and `unimplemented`; follow the existing `Result`/`Option` style.
-- `RENT_IE_URL`/`SLACK_WEBHOOK_URL` are secrets: `check_rent_ie.service` holds placeholders, and untracked `.vscode/launch.json` holds concrete values. Never copy either into tracked files, docs, or logs. `DAFT_IE_REQUEST` is search configuration, not a secret.
 - `Cargo.lock` is committed and CI uses `--locked`; change dependencies with Cargo rather than hand-editing the lockfile.

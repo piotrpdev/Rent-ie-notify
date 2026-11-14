@@ -2,6 +2,7 @@ use nanoserde::{DeJson as Deserialize, SerJson as Serialize};
 
 use crate::listing::Listing;
 use crate::places::{Place, distance_km, format_distance};
+use crate::routing::{RouteMap, format_duration};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WebhookPayload {
@@ -40,7 +41,7 @@ pub struct Accessory {
     pub alt_text: Option<String>,
 }
 
-fn distance_line(listing: &Listing, places: &[Place]) -> String {
+fn distance_line(listing: &Listing, places: &[Place], routes: &RouteMap) -> String {
     let Some(coordinates) = listing.coordinates else {
         return String::new();
     };
@@ -48,23 +49,43 @@ fn distance_line(listing: &Listing, places: &[Place]) -> String {
         return String::new();
     }
 
-    let distances = places
-        .iter()
-        .map(|place| {
-            format!(
-                "{} {}",
-                place.name,
-                format_distance(distance_km(coordinates, place))
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" · ");
+    let measurements = routes.get(&listing.id);
+    let has_drive = measurements.is_some_and(|route| route.iter().any(Option::is_some));
+    let mut entries = Vec::with_capacity(places.len());
 
-    format!("\n*Distance:* {distances}")
+    for (index, place) in places.iter().enumerate() {
+        let route = measurements
+            .and_then(|measurements| measurements.get(index))
+            .copied()
+            .flatten();
+
+        let entry = route.map_or_else(
+            || {
+                let distance = format_distance(distance_km(coordinates, place));
+                if has_drive {
+                    format!("{} {distance} straight-line", place.name)
+                } else {
+                    format!("{} {distance}", place.name)
+                }
+            },
+            |route| {
+                format!(
+                    "{} {} ({})",
+                    place.name,
+                    format_duration(route.duration_seconds),
+                    format_distance(route.distance_meters / 1000.0)
+                )
+            },
+        );
+        entries.push(entry);
+    }
+
+    let label = if has_drive { "*Drive:*" } else { "*Distance:*" };
+    format!("\n{label} {}", entries.join(" · "))
 }
 
 impl WebhookPayload {
-    fn from_listings(listings: &[Listing], places: &[Place]) -> Self {
+    fn from_listings(listings: &[Listing], places: &[Place], routes: &RouteMap) -> Self {
         let blocks: Vec<Block> = listings
             .iter()
             .enumerate()
@@ -82,7 +103,7 @@ impl WebhookPayload {
                             listing.description,
                             listing.price,
                             listing.date,
-                            distance_line(listing, places)
+                            distance_line(listing, places, routes)
                         ),
                     }),
                     accessory: None,
@@ -114,8 +135,12 @@ impl WebhookPayload {
     }
 }
 
-pub(crate) fn listings_to_slack_message_json(listings: &[Listing], places: &[Place]) -> String {
-    let message = WebhookPayload::from_listings(listings, places);
+pub(crate) fn listings_to_slack_message_json(
+    listings: &[Listing],
+    places: &[Place],
+    routes: &RouteMap,
+) -> String {
+    let message = WebhookPayload::from_listings(listings, places, routes);
     message.serialize_json()
 }
 
@@ -124,6 +149,7 @@ mod tests {
     use super::listings_to_slack_message_json;
     use crate::listing::{Coordinates, Listing, ListingSource};
     use crate::places::Place;
+    use crate::routing::{RouteMap, RouteMeasurement};
 
     #[test]
     fn includes_configured_distances() {
@@ -148,8 +174,44 @@ mod tests {
             longitude: -7.159_315,
         }];
 
-        let message = listings_to_slack_message_json(&[listing], &places);
+        let message = listings_to_slack_message_json(&[listing], &places, &RouteMap::new());
 
         assert!(message.contains("*Distance:* Work 0 m"));
+    }
+
+    #[test]
+    fn includes_drive_times_when_available() {
+        let listing = Listing {
+            id: "1".to_string(),
+            source: ListingSource::RentIe,
+            link: "https://example.com/1".to_string(),
+            img_url: String::new(),
+            image_keys: Vec::new(),
+            coordinates: Some(Coordinates {
+                latitude: 52.244_898,
+                longitude: -7.159_315,
+            }),
+            address: "Example address".to_string(),
+            price: "€500 per month".to_string(),
+            date: "2026-11-14".to_string(),
+            description: "House".to_string(),
+        };
+        let places = vec![Place {
+            name: "Work".to_string(),
+            latitude: 52.244_898,
+            longitude: -7.159_315,
+        }];
+        let mut routes = RouteMap::new();
+        routes.insert(
+            "1".to_string(),
+            vec![Some(RouteMeasurement {
+                duration_seconds: 480.0,
+                distance_meters: 2400.0,
+            })],
+        );
+
+        let message = listings_to_slack_message_json(&[listing], &places, &routes);
+
+        assert!(message.contains("*Drive:* Work 8 min (2.4 km)"));
     }
 }

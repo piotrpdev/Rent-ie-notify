@@ -7,6 +7,7 @@ pub mod dedupe;
 pub mod listing;
 pub mod places;
 pub mod rent_ie;
+pub mod routing;
 pub mod slack;
 
 const SENT_IDS_FILENAME: &str = "sent_ids.txt";
@@ -143,6 +144,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         env::var("SLACK_WEBHOOK_URL").map_err(|_| "Failed to get SLACK_WEBHOOK_URL env var")?;
     let rent_ie_url = env::var("RENT_IE_URL").ok();
     let daft_ie_request = env::var(DAFT_IE_REQUEST_ENV).ok();
+    let ors_api_key = env::var("OPENROUTESERVICE_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
 
     if rent_ie_url.is_none() && daft_ie_request.is_none() {
         return Err("Set RENT_IE_URL and/or DAFT_IE_REQUEST".into());
@@ -207,9 +211,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let routes = ors_api_key
+        .as_deref()
+        .map_or_else(routing::RouteMap::new, |api_key| {
+            routing::fetch_routes(&new_listings, &places, api_key)
+        });
+
     for chunk in new_listings.chunks(SLACK_LISTINGS_PER_MESSAGE) {
         println!("Sending {} new listings to Slack...", chunk.len());
-        let slack_message_json = slack::listings_to_slack_message_json(chunk, &places);
+        let slack_message_json = slack::listings_to_slack_message_json(chunk, &places, &routes);
 
         minreq::post(&slack_webhook_url)
             .with_header("Content-Type", "application/json")

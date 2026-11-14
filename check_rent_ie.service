@@ -19,6 +19,8 @@ Environment=RENT_IE_URL='https://www.rent.ie/rooms-to-rent/xxxx/xxxx/room-type_e
 Environment=DAFT_IE_REQUEST='{"section":"xxxx","filters":[{"name":"adState","values":["published"]}],"andFilters":[],"ranges":[{"from":"xxxx","to":"xxxx","name":"numBeds"},{"from":"xxxx","to":"xxxx","name":"rentalPrice"}],"paging":{"from":"0","pageSize":"200"},"geoFilter":{"storedShapeIds":["xxxx"],"geoSearchType":"STORED_SHAPES"},"terms":""}'
 # Optional: JSON array of named places for distance lines.
 # Environment=PLACES_OF_INTEREST='[{"name":"Work","latitude":xxxx,"longitude":xxxx}]'
+# Optional: OpenRouteService API key for driving times/distances.
+# Environment=OPENROUTESERVICE_API_KEY='xxxx'
 Environment=SLACK_WEBHOOK_URL='https://hooks.slack.com/services/xxx/xxx/xxxxxx'
 
 [Install]
