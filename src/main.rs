@@ -412,6 +412,17 @@ fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<Stri
     }
 }
 
+fn max_beds_from_env() -> Result<Option<u32>, String> {
+    match env::var("MAX_BEDS") {
+        Ok(value) if !value.trim().is_empty() => value
+            .trim()
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|error| format!("Invalid MAX_BEDS value: {error}")),
+        _ => Ok(None),
+    }
+}
+
 fn env_flag(name: &str) -> bool {
     env::var(name).is_ok_and(|value| {
         matches!(
@@ -434,6 +445,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .filter(|value| !value.trim().is_empty());
     let text_report_include_all = env_flag("TEXT_REPORT_INCLUDE_ALL");
+    let max_beds = max_beds_from_env()?;
 
     if rent_ie_url.is_none() && daft_ie_request.is_none() && property_ie_url.is_none() {
         return Err("Set RENT_IE_URL, DAFT_IE_REQUEST, and/or PROPERTY_IE_URL".into());
@@ -447,8 +459,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fetch configured sources concurrently. Pagination remains sequential
     // within each source so we don't burst the same host with parallel requests.
-    let (listings, rent_build_id) =
+    let (mut listings, rent_build_id) =
         fetch_all_sources(rent_ie_url, daft_ie_request, property_ie_url)?;
+
+    if let Some(max_beds) = max_beds {
+        listings.retain(|listing| {
+            listing::bedroom_count_from_description(&listing.description)
+                .is_none_or(|bedrooms| bedrooms <= max_beds)
+        });
+    }
 
     let listing_count = listings.len();
     let groups = dedupe::group_listings(listings);

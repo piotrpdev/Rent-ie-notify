@@ -109,6 +109,16 @@ const fn month_name(month: i64) -> &'static str {
     }
 }
 
+pub(crate) fn bedroom_count_from_description(description: &str) -> Option<u32> {
+    description
+        .split(" · ")
+        .next()?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
 pub(crate) fn format_publish_date(timestamp_ms: u64) -> String {
     let days_since_epoch = i64::try_from(timestamp_ms / 86_400_000).unwrap_or_default();
     let (year, month, day) = civil_from_days(days_since_epoch);
@@ -147,7 +157,7 @@ pub(crate) const fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_image_keys, format_publish_date};
+    use super::{bedroom_count_from_description, extract_image_keys, format_publish_date};
 
     #[test]
     fn formats_publish_date_in_utc() {
@@ -166,6 +176,15 @@ mod tests {
         assert_eq!(format_publish_date(1_728_000_000), "21st of January, 1970");
         assert_eq!(format_publish_date(1_814_400_000), "22nd of January, 1970");
         assert_eq!(format_publish_date(1_900_800_000), "23rd of January, 1970");
+    }
+
+    #[test]
+    fn parses_numeric_bedroom_counts_from_descriptions() {
+        assert_eq!(
+            bedroom_count_from_description("16 Bed · 15 Bath · House"),
+            Some(16)
+        );
+        assert_eq!(bedroom_count_from_description("Double Room · House"), None);
     }
 
     #[test]

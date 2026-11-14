@@ -7,6 +7,7 @@ Set `SLACK_WEBHOOK_URL` and at least one source:
 - `RENT_IE_URL` — a rent.ie search-results URL.
 - `DAFT_IE_REQUEST` — the JSON request body for `https://gateway.daft.ie/api/v2/ads/listings`.
 - `PROPERTY_IE_URL` — a property.ie search-results URL.
+- `MAX_BEDS` — optional client-side maximum bedroom count applied across all sources.
 
 Optional:
 
