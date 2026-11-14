@@ -70,11 +70,46 @@ pub(crate) fn format_description(parts: [Option<String>; 3]) -> String {
         .join(" · ")
 }
 
+fn ordinal_suffix(day: i64) -> &'static str {
+    if (11..=13).contains(&(day % 100)) {
+        return "th";
+    }
+
+    match day % 10 {
+        1 => "st",
+        2 => "nd",
+        3 => "rd",
+        _ => "th",
+    }
+}
+
+const fn month_name(month: i64) -> &'static str {
+    match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => "",
+    }
+}
+
 pub(crate) fn format_publish_date(timestamp_ms: u64) -> String {
     let days_since_epoch = i64::try_from(timestamp_ms / 86_400_000).unwrap_or_default();
     let (year, month, day) = civil_from_days(days_since_epoch);
 
-    format!("{year:04}-{month:02}-{day:02}")
+    format!(
+        "{day}{} of {}, {year}",
+        ordinal_suffix(day),
+        month_name(month)
+    )
 }
 
 /// Converts days since 1970-01-01 into a `(year, month, day)` UTC date.
@@ -108,8 +143,21 @@ mod tests {
 
     #[test]
     fn formats_publish_date_in_utc() {
-        assert_eq!(format_publish_date(1_794_588_353_317), "2026-11-13");
-        assert_eq!(format_publish_date(0), "1970-01-01");
+        assert_eq!(
+            format_publish_date(1_794_588_353_317),
+            "13th of November, 2026"
+        );
+        assert_eq!(format_publish_date(0), "1st of January, 1970");
+    }
+
+    #[test]
+    fn formats_ordinal_date_suffixes() {
+        assert_eq!(format_publish_date(86_400_000), "2nd of January, 1970");
+        assert_eq!(format_publish_date(172_800_000), "3rd of January, 1970");
+        assert_eq!(format_publish_date(864_000_000), "11th of January, 1970");
+        assert_eq!(format_publish_date(1_728_000_000), "21st of January, 1970");
+        assert_eq!(format_publish_date(1_814_400_000), "22nd of January, 1970");
+        assert_eq!(format_publish_date(1_900_800_000), "23rd of January, 1970");
     }
 
     #[test]

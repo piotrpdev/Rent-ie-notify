@@ -165,7 +165,7 @@ mod tests {
             }),
             address: "Example address".to_string(),
             price: "€500 per month".to_string(),
-            date: "2026-11-14".to_string(),
+            date: "14th of November, 2026".to_string(),
             description: "House".to_string(),
         };
         let places = vec![Place {
@@ -193,7 +193,7 @@ mod tests {
             }),
             address: "Example address".to_string(),
             price: "€500 per month".to_string(),
-            date: "2026-11-14".to_string(),
+            date: "14th of November, 2026".to_string(),
             description: "House".to_string(),
         };
         let places = vec![Place {

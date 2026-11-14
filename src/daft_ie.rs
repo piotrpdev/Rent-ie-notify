@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(listing.img_url, "https://media.daft.ie/example.jpg");
         assert_eq!(listing.address, "Rockshire Road, Ferrybank, Co. Waterford");
         assert_eq!(listing.price, "€1,800 per month");
-        assert_eq!(listing.date, "2026-11-13");
+        assert_eq!(listing.date, "13th of November, 2026");
         assert_eq!(listing.description, "2 Bed · 1 Bath · Apartment");
 
         Ok(())
@@ -266,7 +266,7 @@ mod tests {
             first.link,
             "https://www.daft.ie/for-rent/rockshire-road-ferrybank-co-waterford/6710820"
         );
-        assert_eq!(first.date, "2026-11-13");
+        assert_eq!(first.date, "13th of November, 2026");
         assert_eq!(first.description, "2 Bed · 1 Bath · Apartment");
 
         let (_, next_from) = extract_page_from_json(&json)?;

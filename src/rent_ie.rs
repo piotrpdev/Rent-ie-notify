@@ -298,7 +298,7 @@ mod tests {
             "Thomas Street, Waterford, Ferrybank, Co. Waterford"
         );
         assert_eq!(listing.price, "€650 per month");
-        assert_eq!(listing.date, "2026-11-13");
+        assert_eq!(listing.date, "13th of November, 2026");
         assert_eq!(listing.description, "Double Room · House");
 
         Ok(())

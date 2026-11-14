@@ -20,7 +20,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 
 ## Commands
 
-- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (23 unit tests, plus 3 ignored archive-backed tests).
+- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (24 unit tests, plus 3 ignored archive-backed tests).
 - Check everything: `scripts/check.sh` (also runs the archive tests and release build).
 - Archive check: `cargo test --locked -- --ignored` (parses the rent.ie and daft.ie fixtures in `archives/`).
 - Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.
@@ -41,7 +41,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 - daft.ie uses a POST to `https://gateway.daft.ie/api/v2/ads/listings`. `DAFT_IE_REQUEST` is the JSON request body; it needs `accept`/`content-type`, `brand: daft`, `platform: web`, `origin`, and `referer` (set in `main.rs`). Browser-only `sec-*`/`user-agent` headers aren't required; omitting brand/platform returns 400 and omitting origin/referer gets a 403. The gateway caps `pageSize` at 50 and pagination follows `paging.nextFrom`, rewriting only the request body's `paging.from` value.
 - Both search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`. The rent.ie `property.json` / daft property endpoints have descriptions but cost one extra request per new listing.
 - rent.ie and daft.ie are fetched concurrently on separate threads. Pagination within each source stays sequential and sleeps for `PAGE_REQUEST_DELAY` (1 second) between pages to avoid rate limiting.
-- Search API `publishDate` is epoch milliseconds and is converted to a UTC `YYYY-MM-DD` date.
+- Search API `publishDate` is epoch milliseconds and is converted to a UTC human-readable date such as `14th of November, 2026`.
 - `PLACES_OF_INTEREST` is an optional JSON array:
   `[{"name":"Work","latitude":52.244898,"longitude":-7.159315}]`.
   Slack shows straight-line distances from the listing's media/API location when no ORS data is available. Only daft.ie search results currently include coordinates; the dedupe representative borrows them from the daft.ie group member. Listings with no coordinates (including rent-only listings) omit the distance line.
