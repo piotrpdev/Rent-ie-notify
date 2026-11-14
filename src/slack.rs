@@ -1,6 +1,6 @@
 use nanoserde::{DeJson as Deserialize, SerJson as Serialize};
 
-use crate::rent_ie::RentListing;
+use crate::listing::Listing;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WebhookPayload {
@@ -39,8 +39,8 @@ pub struct Accessory {
     pub alt_text: Option<String>,
 }
 
-impl From<&[&RentListing]> for WebhookPayload {
-    fn from(listings: &[&RentListing]) -> Self {
+impl From<&[&Listing]> for WebhookPayload {
+    fn from(listings: &[&Listing]) -> Self {
         let blocks: Vec<Block> = listings
             .iter()
             .enumerate()
@@ -89,7 +89,7 @@ impl From<&[&RentListing]> for WebhookPayload {
     }
 }
 
-pub(crate) fn listings_to_slack_message_json(listings: &Vec<&RentListing>) -> String {
-    let message: WebhookPayload = listings.as_slice().into();
+pub(crate) fn listings_to_slack_message_json(listings: &[&Listing]) -> String {
+    let message: WebhookPayload = listings.into();
     message.serialize_json()
 }
