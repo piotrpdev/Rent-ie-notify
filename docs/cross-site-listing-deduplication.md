@@ -163,9 +163,9 @@ Results:
 
 ## Grouping versus suppression
 
-The implemented version groups cross-source duplicates and sends only the first
-source's representative, suppressing the rest. This keeps Slack notifications
-quiet and avoids exposing two nearly identical messages.
+The implemented version groups cross-source duplicates and sends only one
+representative (daft.ie when present), suppressing the rest. This keeps Slack
+notifications quiet and avoids exposing two nearly identical messages.
 
 If false positives ever become a problem, the safer fallback is to show one block
 with both links instead:
@@ -188,7 +188,8 @@ Implemented behavior:
 - Listings are grouped by shared numeric ID or intersecting decoded image keys.
   Image-key matching only applies across different sources, so reusing a photo
   within one site does not merge distinct ads.
-- The first source configured is the Slack representative for a group.
+- The daft.ie listing is preferred as the Slack representative for a group;
+  otherwise the first listing is used.
 - A group is skipped if any member ID was already sent. When a new image-key
   group has different IDs, all of them are written to `sent_ids.txt`.
 - Exact-ID duplicates across runs are handled. A cross-run image-key-only
@@ -205,8 +206,8 @@ Implemented in `src/dedupe.rs`:
 
 1. Group exact shared-ID matches.
 2. Decode media descriptors and match image keys across sources.
-3. Keep the first source's listing as the representative and suppress the rest
-   from Slack.
+3. Prefer the daft.ie listing as the representative (otherwise use the first)
+   and suppress the rest from Slack.
 4. Save every ID in each new group so future exact-ID duplicates are skipped.
 
 Possible later work:

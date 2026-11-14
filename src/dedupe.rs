@@ -1,4 +1,4 @@
-use crate::listing::Listing;
+use crate::listing::{Listing, ListingSource};
 
 fn are_duplicates(left: &Listing, right: &Listing) -> bool {
     left.id == right.id
@@ -9,12 +9,14 @@ fn are_duplicates(left: &Listing, right: &Listing) -> bool {
                 .any(|key| right.image_keys.contains(key)))
 }
 
-/// Groups listings that share a numeric ID or any decoded media key.
-///
-/// Listings are kept in input order, so the first source configured wins when
-/// representatives are chosen.
+/// Prefers the daft.ie listing as the group representative, then falls back to
+/// the first listing in the group.
 pub(crate) fn representative(group: &[Listing]) -> Option<Listing> {
-    let mut representative = group.first()?.clone();
+    let mut representative = group
+        .iter()
+        .find(|listing| listing.source == ListingSource::Daft)
+        .or_else(|| group.first())?
+        .clone();
 
     if representative.coordinates.is_none() {
         representative.coordinates = group.iter().find_map(|candidate| candidate.coordinates);
@@ -89,6 +91,26 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups.first().map(Vec::len), Some(2));
         assert_eq!(groups.get(1).map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn prefers_the_daft_listing_as_representative() {
+        let group = vec![
+            listing("1", &["a"], ListingSource::Rent),
+            listing("2", &["a"], ListingSource::Daft),
+            listing("3", &["a"], ListingSource::Property),
+        ];
+
+        let representative = representative(&group);
+
+        assert_eq!(
+            representative.as_ref().map(|listing| listing.source),
+            Some(ListingSource::Daft)
+        );
+        assert_eq!(
+            representative.as_ref().map(|listing| listing.id.as_str()),
+            Some("2")
+        );
     }
 
     #[test]
