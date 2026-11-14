@@ -1,22 +1,22 @@
-use std::{env, fs::OpenOptions, io::Write, thread, time::Duration};
+use std::{env, fs::OpenOptions, io::Write, thread};
 
 use crate::listing::Listing;
 
 pub mod daft_ie;
 pub mod dedupe;
+pub mod delay;
 pub mod listing;
 pub mod places;
 pub mod rent_ie;
 pub mod routing;
 pub mod slack;
+pub mod text;
 
 const SENT_IDS_FILENAME: &str = "sent_ids.txt";
 const DAFT_IE_REQUEST_ENV: &str = "DAFT_IE_REQUEST";
 // Slack allows at most 50 Block Kit blocks per message. Each listing uses a
 // section plus a divider, so 20 listings is 39 blocks, leaving some headroom.
 const SLACK_LISTINGS_PER_MESSAGE: usize = 20;
-// Pause between paginated API calls so we don't trigger rate limits.
-const PAGE_REQUEST_DELAY: Duration = Duration::from_secs(1);
 
 fn parse_sent_ids(content: &str) -> Vec<String> {
     // Older versions stored "<slug>/<id>" and later versions stored daft IDs as
@@ -30,7 +30,7 @@ fn parse_sent_ids(content: &str) -> Vec<String> {
         .collect()
 }
 
-fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<Vec<Listing>, String> {
+fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<(Vec<Listing>, String), String> {
     // `_next/data` URLs include a deployment-specific build ID that is only
     // published in the search page's `__NEXT_DATA__` metadata.
     println!("Fetching rent.ie search page metadata...");
@@ -49,6 +49,7 @@ fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<Vec<Listing>, String> {
         .as_str()
         .map_err(|e| format!("Failed to read search page body: {e}"))?;
 
+    let build_id = rent_ie::build_id_from_html(html_response)?;
     let search_api_url = rent_ie::search_api_url(html_response)
         .map_err(|e| format!("Failed to build rent.ie API URL: {e}"))?;
 
@@ -86,11 +87,11 @@ fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<Vec<Listing>, String> {
         let Some(page_next) = page_next else {
             break;
         };
-        thread::sleep(PAGE_REQUEST_DELAY);
+        delay::sleep();
         next_page = Some(page_next);
     }
 
-    Ok(listings)
+    Ok((listings, build_id))
 }
 
 fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, String> {
@@ -133,10 +134,173 @@ fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, String> {
 
         request_body = daft_ie::request_body_with_offset(&request_body, next_from)
             .map_err(|e| format!("Failed to update daft.ie paging: {e}"))?;
-        thread::sleep(PAGE_REQUEST_DELAY);
+        delay::sleep();
     }
 
     Ok(listings)
+}
+
+fn fetch_rent_build_id() -> Result<String, String> {
+    let response = minreq::get("https://www.rent.ie/")
+        .send()
+        .map_err(|error| format!("Failed to fetch rent.ie homepage: {error}"))?;
+
+    if response.status_code != 200 {
+        return Err(format!(
+            "Failed to fetch rent.ie homepage: received status code {}",
+            response.status_code
+        ));
+    }
+
+    let html = response
+        .as_str()
+        .map_err(|error| format!("Failed to read rent.ie homepage: {error}"))?;
+
+    rent_ie::build_id_from_html(html)
+}
+
+fn add_listing_details(listings: &mut [Listing], build_id: &str) {
+    let count = listings.len();
+    println!("Fetching property availability details...");
+
+    for (index, listing) in listings.iter_mut().enumerate() {
+        let result = (|| -> Result<(), String> {
+            let url = rent_ie::property_details_url(build_id, listing)?;
+            let response = minreq::get(url)
+                .with_header("accept", "application/json")
+                .send()
+                .map_err(|error| format!("Failed to fetch property details: {error}"))?;
+
+            if response.status_code != 200 {
+                return Err(format!(
+                    "property details returned status {}",
+                    response.status_code
+                ));
+            }
+
+            let json = response
+                .as_str()
+                .map_err(|error| format!("Failed to read property details: {error}"))?;
+            let details = rent_ie::extract_details_from_json(json)?;
+            listing.available_from = details.available_from;
+            listing.minimum_lease = details.minimum_lease;
+            listing.single_bedrooms = details.single_bedrooms;
+            listing.double_bedrooms = details.double_bedrooms;
+            listing.twin_bedrooms = details.twin_bedrooms;
+            listing.bathrooms = details.bathrooms;
+
+            Ok(())
+        })();
+
+        if let Err(error) = result {
+            eprintln!(
+                "Failed to fetch property details for {}: {error}",
+                listing.id
+            );
+        }
+
+        if index + 1 < count {
+            delay::sleep();
+        }
+    }
+}
+
+fn copy_detail_fields(target: &mut Listing, source: &Listing) {
+    target.available_from.clone_from(&source.available_from);
+    target.minimum_lease.clone_from(&source.minimum_lease);
+    target.single_bedrooms = source.single_bedrooms;
+    target.double_bedrooms = source.double_bedrooms;
+    target.twin_bedrooms = source.twin_bedrooms;
+    target.bathrooms = source.bathrooms;
+}
+
+fn send_slack_listings(
+    webhook_url: &str,
+    listings: &[Listing],
+    places: &[crate::places::Place],
+    routes: &routing::RouteMap,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for chunk in listings.chunks(SLACK_LISTINGS_PER_MESSAGE) {
+        println!("Sending {} new listings to Slack...", chunk.len());
+        let slack_message_json = slack::listings_to_slack_message_json(chunk, places, routes);
+
+        minreq::post(webhook_url)
+            .with_header("Content-Type", "application/json")
+            .with_body(slack_message_json)
+            .send()
+            .map_err(|e| format!("Failed to send message to Slack: {e}"))?;
+    }
+
+    Ok(())
+}
+
+fn prepare_details_and_report(
+    groups: &[Vec<Listing>],
+    new_listings: &mut [Listing],
+    report_dir: Option<&str>,
+    include_all: bool,
+    rent_build_id: Option<String>,
+) -> Result<(), String> {
+    let Some(report_dir) = report_dir else {
+        if !new_listings.is_empty() {
+            populate_listing_details(new_listings, rent_build_id);
+        }
+        return Ok(());
+    };
+
+    let report_path = if include_all {
+        let mut all_listings: Vec<Listing> = groups
+            .iter()
+            .filter_map(|group| dedupe::representative(group))
+            .collect();
+
+        populate_listing_details(&mut all_listings, rent_build_id);
+
+        for listing in new_listings.iter_mut() {
+            if let Some(source) = all_listings
+                .iter()
+                .find(|candidate| candidate.id == listing.id)
+            {
+                copy_detail_fields(listing, source);
+            }
+        }
+
+        text::write_report(report_dir, &all_listings)?
+    } else {
+        if !new_listings.is_empty() {
+            populate_listing_details(new_listings, rent_build_id);
+        }
+        text::write_report(report_dir, new_listings)?
+    };
+
+    println!("Wrote report to {report_path}");
+    Ok(())
+}
+
+fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<String>) {
+    let details_build_id = rent_build_id.map_or_else(
+        || match fetch_rent_build_id() {
+            Ok(build_id) => Some(build_id),
+            Err(error) => {
+                eprintln!("Failed to fetch rent.ie build ID for property details: {error}");
+                None
+            }
+        },
+        Some,
+    );
+
+    if let Some(build_id) = details_build_id {
+        add_listing_details(listings, &build_id);
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes"
+        )
+    })
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -147,6 +311,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ors_api_key = env::var("OPENROUTESERVICE_API_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty());
+    let text_report_dir = env::var("TEXT_REPORT_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let text_report_include_all = env_flag("TEXT_REPORT_INCLUDE_ALL");
 
     if rent_ie_url.is_none() && daft_ie_request.is_none() {
         return Err("Set RENT_IE_URL and/or DAFT_IE_REQUEST".into());
@@ -164,11 +332,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let daft_thread =
         daft_ie_request.map(|body| thread::spawn(move || fetch_daft_ie_listings(&body)));
 
-    let rent_result = match rent_thread {
+    let rent_result: Result<(Vec<Listing>, Option<String>), String> = match rent_thread {
         Some(handle) => handle
             .join()
-            .map_err(|_| "rent.ie fetch thread panicked".to_string())?,
-        None => Ok(Vec::new()),
+            .map_err(|_| "rent.ie fetch thread panicked".to_string())?
+            .map(|(listings, build_id)| (listings, Some(build_id))),
+        None => Ok((Vec::new(), None)),
     };
     let daft_result = match daft_thread {
         Some(handle) => handle
@@ -177,7 +346,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => Ok(Vec::new()),
     };
 
-    let mut listings = rent_result?;
+    let (mut listings, rent_build_id) = rent_result?;
     listings.extend(daft_result?);
 
     let listing_count = listings.len();
@@ -197,13 +366,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let new_groups: Vec<Vec<Listing>> = groups
-        .into_iter()
+        .iter()
         .filter(|group| !group.iter().any(|listing| sent_ids.contains(&listing.id)))
+        .cloned()
         .collect();
-    let new_listings: Vec<Listing> = new_groups
+    let mut new_listings: Vec<Listing> = new_groups
         .iter()
         .filter_map(|group| dedupe::representative(group))
         .collect();
+
+    prepare_details_and_report(
+        &groups,
+        &mut new_listings,
+        text_report_dir.as_deref(),
+        text_report_include_all,
+        rent_build_id,
+    )?;
 
     if new_listings.is_empty() {
         println!("No new listings.");
@@ -217,16 +395,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             routing::fetch_routes(&new_listings, &places, api_key)
         });
 
-    for chunk in new_listings.chunks(SLACK_LISTINGS_PER_MESSAGE) {
-        println!("Sending {} new listings to Slack...", chunk.len());
-        let slack_message_json = slack::listings_to_slack_message_json(chunk, &places, &routes);
-
-        minreq::post(&slack_webhook_url)
-            .with_header("Content-Type", "application/json")
-            .with_body(slack_message_json)
-            .send()
-            .map_err(|e| format!("Failed to send message to Slack: {e}"))?;
-    }
+    send_slack_listings(&slack_webhook_url, &new_listings, &places, &routes)?;
 
     let mut new_ids = Vec::new();
     for group in &new_groups {

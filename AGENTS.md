@@ -4,10 +4,12 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 
 ## Layout
 
-- `src/main.rs` — orchestration: env vars, source fetching, grouping, dedupe, Slack POST, state file.
+- `src/main.rs` — orchestration: env vars, source fetching, grouping, dedupe, property details, Slack POST, state file.
+- `src/delay.rs` — jittered delay helper for paginated/detail requests.
 - `src/listing.rs` — shared `Listing` model, coordinates, image-key extraction, and description/date formatting.
 - `src/places.rs` — parses `PLACES_OF_INTEREST`, computes haversine distances, and formats them for Slack.
 - `src/routing.rs` — batched OpenRouteService `driving-car` Matrix requests for drive time/distance, with straight-line fallback.
+- `src/text.rs` — generates the optional text report grouped by bedroom configuration.
 - `src/dedupe.rs` — groups listings across sources by shared numeric ID or intersecting image keys.
 - `src/rent_ie.rs` — builds the rent.ie `_next/data` search API URL from `__NEXT_DATA__.page`/`query` and parses the API JSON; `tl` locates the metadata script, `nanoserde` parses JSON.
 - `src/daft_ie.rs` — parses daft.ie gateway API responses; links use `https://www.daft.ie<seoFriendlyPath>`.
@@ -20,12 +22,12 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 
 ## Commands
 
-- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (24 unit tests, plus 3 ignored archive-backed tests).
+- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (28 unit tests, plus 3 ignored archive-backed tests).
 - Check everything: `scripts/check.sh` (also runs the archive tests and release build).
 - Archive check: `cargo test --locked -- --ignored` (parses the rent.ie and daft.ie fixtures in `archives/`).
 - Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.
 - Build: `cargo build --release` → `target/release/Rent-ie-notify`.
-- Run from the repo root with `SLACK_WEBHOOK_URL` and at least one of `RENT_IE_URL` or `DAFT_IE_REQUEST` set. Optional `PLACES_OF_INTEREST` adds distance lines; optional `OPENROUTESERVICE_API_KEY` enables driving times/distances.
+- Run from the repo root with `SLACK_WEBHOOK_URL` and at least one of `RENT_IE_URL` or `DAFT_IE_REQUEST` set. Optional `PLACES_OF_INTEREST` adds distance lines; optional `OPENROUTESERVICE_API_KEY` enables driving times/distances; optional `TEXT_REPORT_DIR` writes grouped timestamped text reports.
 - CI pins Rust 1.92.0 (workflow); locally installed toolchains may be newer, so avoid APIs newer than that.
 
 ## Gotchas
@@ -39,13 +41,15 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 - Image keys are decoded from the base64 media URL descriptor's `key` field. Duplicates are grouped across sources by shared ID or intersecting image keys; image-key matches within the same source are ignored so reused/stock photos do not merge distinct ads. The first source configured provides the Slack representative.
 - rent.ie `seoFriendlyPath` is a `/share/<slug>/<id>` path that 404s. Links are constructed as `https://www.rent.ie/<pageProps.propertyType>/<slug>/<id>/`; the section varies (`rooms-to-rent`, `houses-to-let`, etc.).
 - daft.ie uses a POST to `https://gateway.daft.ie/api/v2/ads/listings`. `DAFT_IE_REQUEST` is the JSON request body; it needs `accept`/`content-type`, `brand: daft`, `platform: web`, `origin`, and `referer` (set in `main.rs`). Browser-only `sec-*`/`user-agent` headers aren't required; omitting brand/platform returns 400 and omitting origin/referer gets a 403. The gateway caps `pageSize` at 50 and pagination follows `paging.nextFrom`, rewriting only the request body's `paging.from` value.
-- Both search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`. The rent.ie `property.json` / daft property endpoints have descriptions but cost one extra request per new listing.
-- rent.ie and daft.ie are fetched concurrently on separate threads. Pagination within each source stays sequential and sleeps for `PAGE_REQUEST_DELAY` (1 second) between pages to avoid rate limiting.
+- Both search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`.
+- For each new group representative, `rent_ie::property_details_url`/`extract_details_from_json` fetch `propertyOverview` from the rent.ie property endpoint (it works for daft.ie IDs too). Missing values omit the `Available from`/`Minimum lease` lines; individual detail failures are logged and do not fail the run.
+- rent.ie and daft.ie are fetched concurrently on separate threads. Pagination and property-detail requests stay sequential and call `delay::sleep()` (1 second plus up to 500 ms of jitter) between requests to avoid rate limiting/bot detection.
 - Search API `publishDate` is epoch milliseconds and is converted to a UTC human-readable date such as `14th of November, 2026`.
 - `PLACES_OF_INTEREST` is an optional JSON array:
   `[{"name":"Work","latitude":52.244898,"longitude":-7.159315}]`.
   Slack shows straight-line distances from the listing's media/API location when no ORS data is available. Only daft.ie search results currently include coordinates; the dedupe representative borrows them from the daft.ie group member. Listings with no coordinates (including rent-only listings) omit the distance line.
 - `OPENROUTESERVICE_API_KEY` enables the `driving-car` matrix profile. Requests are batched (40 origins max), request both duration and distance, and any API failure/limit falls back to straight-line distances. ORS uses OSM profile speeds, not live traffic.
+- `TEXT_REPORT_DIR` enables timestamped text reports (`report-YYYY-MM-DD_HH-MM-SS.txt`) of **new listings** by default, grouped by single/double-bed counts from property details. `TEXT_REPORT_INCLUDE_ALL=1` changes it to all unique listings in the current run; that mode fetches details for every unique listing, not just new ones, so only enable it when the extra requests are acceptable.
 - `RENT_IE_URL`/`SLACK_WEBHOOK_URL`/`OPENROUTESERVICE_API_KEY` are secrets: `check_rent_ie.service` holds placeholders, and untracked `.vscode/launch.json` holds concrete values. Never copy them into tracked files, docs, or logs. `PLACES_OF_INTEREST` and `DAFT_IE_REQUEST` are configuration, not secrets.
 - A 403 from rent.ie or daft.ie is likely Cloudflare; the rent.ie error in `main.rs` suggests retrying from a residential IP.
 - `Cargo.toml` forbids `unsafe_code` and denies clippy `unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `todo`, and `unimplemented`; follow the existing `Result`/`Option` style.

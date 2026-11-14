@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use nanoserde::{DeJson as Deserialize, SerJson as Serialize};
 
 use crate::listing::Listing;
@@ -91,20 +93,24 @@ impl WebhookPayload {
             .enumerate()
             .flat_map(|(i, listing)| {
                 let mut inner_blocks = Vec::new();
+                let mut text = format!(
+                    "*<{}|{}>*\n{}\n*Price:* {}\n*Posted:* {}",
+                    listing.link, listing.address, listing.description, listing.price, listing.date
+                );
+
+                if !listing.available_from.is_empty() {
+                    let _ = write!(text, "\n*Available from:* {}", listing.available_from);
+                }
+                if !listing.minimum_lease.is_empty() {
+                    let _ = write!(text, "\n*Minimum lease:* {}", listing.minimum_lease);
+                }
+                text.push_str(&distance_line(listing, places, routes));
 
                 let mut listing_block = Block {
                     block_type: "section".to_string(),
                     text: Some(TextObject {
                         text_type: "mrkdwn".to_string(),
-                        text: format!(
-                            "*<{}|{}>*\n{}\n*Price:* {}\n*Posted:* {}{}",
-                            listing.link,
-                            listing.address,
-                            listing.description,
-                            listing.price,
-                            listing.date,
-                            distance_line(listing, places, routes)
-                        ),
+                        text,
                     }),
                     accessory: None,
                 };
@@ -167,6 +173,13 @@ mod tests {
             price: "€500 per month".to_string(),
             date: "14th of November, 2026".to_string(),
             description: "House".to_string(),
+            available_from: "Now".to_string(),
+            minimum_lease: "1 Year".to_string(),
+            single_bedrooms: None,
+            double_bedrooms: None,
+            twin_bedrooms: None,
+            bathrooms: None,
+            detail_property_type: "houses-to-let".to_string(),
         };
         let places = vec![Place {
             name: "Work".to_string(),
@@ -176,6 +189,8 @@ mod tests {
 
         let message = listings_to_slack_message_json(&[listing], &places, &RouteMap::new());
 
+        assert!(message.contains("*Available from:* Now"));
+        assert!(message.contains("*Minimum lease:* 1 Year"));
         assert!(message.contains("*Distance:* Work 0 m"));
     }
 
@@ -195,6 +210,13 @@ mod tests {
             price: "€500 per month".to_string(),
             date: "14th of November, 2026".to_string(),
             description: "House".to_string(),
+            available_from: "Now".to_string(),
+            minimum_lease: "1 Year".to_string(),
+            single_bedrooms: None,
+            double_bedrooms: None,
+            twin_bedrooms: None,
+            bathrooms: None,
+            detail_property_type: "houses-to-let".to_string(),
         };
         let places = vec![Place {
             name: "Work".to_string(),

@@ -55,6 +55,43 @@ struct SearchResult {
 }
 
 #[derive(Debug, DeJson)]
+struct PropertyData {
+    #[nserde(rename = "pageProps")]
+    page_props: PropertyPageProps,
+}
+
+#[derive(Debug, DeJson)]
+struct PropertyPageProps {
+    listing: PropertyListing,
+}
+
+#[derive(Debug, DeJson)]
+struct PropertyListing {
+    #[nserde(rename = "propertyOverview", default)]
+    property_overview: Vec<PropertyOverviewItem>,
+}
+
+#[derive(Debug, DeJson)]
+struct PropertyOverviewItem {
+    label: String,
+    text: String,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ListingDetails {
+    pub(crate) available_from: String,
+    pub(crate) minimum_lease: String,
+    pub(crate) single_bedrooms: Option<u32>,
+    pub(crate) double_bedrooms: Option<u32>,
+    pub(crate) twin_bedrooms: Option<u32>,
+    pub(crate) bathrooms: Option<u32>,
+}
+
+fn parse_count(text: &str) -> Option<u32> {
+    text.split_whitespace().next()?.parse().ok()
+}
+
+#[derive(Debug, DeJson)]
 struct ListingData {
     id: u64,
     title: String,
@@ -116,6 +153,13 @@ fn listing_from_data(listing: ListingData, section: &str) -> Listing {
         price: price.trim().to_string(),
         date: publish_date.map(format_publish_date).unwrap_or_default(),
         description: format_description([num_bedrooms, num_bathrooms, property_type]),
+        available_from: String::new(),
+        minimum_lease: String::new(),
+        single_bedrooms: None,
+        double_bedrooms: None,
+        twin_bedrooms: None,
+        bathrooms: None,
+        detail_property_type: section.to_string(),
     }
 }
 
@@ -185,6 +229,60 @@ pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
     Ok(url)
 }
 
+pub(crate) fn build_id_from_html(html: &str) -> Result<String, String> {
+    Ok(parse_next_page_data(html)?.build_id)
+}
+
+pub(crate) fn property_details_url(build_id: &str, listing: &Listing) -> Result<String, String> {
+    let address = listing
+        .link
+        .trim_end_matches('/')
+        .rsplit('/')
+        .nth(1)
+        .ok_or_else(|| format!("Could not extract address from {}", listing.link))?;
+    let property_type = if listing.detail_property_type.is_empty() {
+        "houses-to-let"
+    } else {
+        &listing.detail_property_type
+    };
+
+    Ok(format!(
+        "{RENT_IE_BASE_URL}/_next/data/{build_id}/property.json?id={}&propertyType={property_type}&address={address}",
+        listing.id
+    ))
+}
+
+pub(crate) fn extract_details_from_json(json: &str) -> Result<ListingDetails, String> {
+    let data: PropertyData = PropertyData::deserialize_json(json)
+        .map_err(|error| format!("Failed to parse property JSON: {error}"))?;
+    let mut details = ListingDetails::default();
+
+    for item in data.page_props.listing.property_overview {
+        let label = item.label.trim();
+        if label.eq_ignore_ascii_case("Available From") {
+            details.available_from = item.text.trim().to_string();
+        } else if label.eq_ignore_ascii_case("Available For")
+            || label.eq_ignore_ascii_case("Minimum Lease")
+            || label.eq_ignore_ascii_case("Lease Length")
+            || label.eq_ignore_ascii_case("Lease")
+        {
+            details.minimum_lease = item.text.trim().to_string();
+        } else if label.eq_ignore_ascii_case("Single Bedroom") {
+            details.single_bedrooms = parse_count(item.text.trim());
+        } else if label.eq_ignore_ascii_case("Double Bedroom") {
+            details.double_bedrooms = parse_count(item.text.trim());
+        } else if label.eq_ignore_ascii_case("Twin Bedroom")
+            || label.eq_ignore_ascii_case("Twin Room")
+        {
+            details.twin_bedrooms = parse_count(item.text.trim());
+        } else if label.eq_ignore_ascii_case("Bathroom") {
+            details.bathrooms = parse_count(item.text.trim());
+        }
+    }
+
+    Ok(details)
+}
+
 pub(crate) fn extract_page_from_json(json: &str) -> Result<(Vec<Listing>, Option<u32>), String> {
     let data: SearchData =
         SearchData::deserialize_json(json).map_err(|e| format!("Failed to parse API JSON: {e}"))?;
@@ -208,7 +306,10 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<(Vec<Listing>, Option
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_page_from_json, listing_url, search_api_url};
+    use super::{
+        build_id_from_html, extract_details_from_json, extract_page_from_json, listing_url,
+        search_api_url,
+    };
 
     const PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html>
@@ -300,6 +401,23 @@ mod tests {
         assert_eq!(listing.price, "€650 per month");
         assert_eq!(listing.date, "13th of November, 2026");
         assert_eq!(listing.description, "Double Room · House");
+
+        Ok(())
+    }
+
+    #[test]
+    fn extracts_build_id_and_property_details() -> Result<(), String> {
+        assert_eq!(build_id_from_html(PAGE_HTML)?, "test-build");
+
+        let details = extract_details_from_json(
+            r#"{"pageProps":{"listing":{"propertyOverview":[{"label":"Available From","text":"Nov 30th, 2026"},{"label":"Lease","text":"1 Year"},{"label":"Single Bedroom","text":"2"},{"label":"Double Bedroom","text":"1"},{"label":"Twin Bedroom","text":"1"},{"label":"Bathroom","text":"1"}]}}}"#,
+        )?;
+        assert_eq!(details.available_from, "Nov 30th, 2026");
+        assert_eq!(details.minimum_lease, "1 Year");
+        assert_eq!(details.single_bedrooms, Some(2));
+        assert_eq!(details.double_bedrooms, Some(1));
+        assert_eq!(details.twin_bedrooms, Some(1));
+        assert_eq!(details.bathrooms, Some(1));
 
         Ok(())
     }

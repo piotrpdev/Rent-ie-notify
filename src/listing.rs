@@ -26,6 +26,13 @@ pub(crate) struct Listing {
     pub(crate) price: String,
     pub(crate) date: String,
     pub(crate) description: String,
+    pub(crate) available_from: String,
+    pub(crate) minimum_lease: String,
+    pub(crate) single_bedrooms: Option<u32>,
+    pub(crate) double_bedrooms: Option<u32>,
+    pub(crate) twin_bedrooms: Option<u32>,
+    pub(crate) bathrooms: Option<u32>,
+    pub(crate) detail_property_type: String,
 }
 
 #[derive(Debug, DeJson)]
@@ -113,7 +120,7 @@ pub(crate) fn format_publish_date(timestamp_ms: u64) -> String {
 }
 
 /// Converts days since 1970-01-01 into a `(year, month, day)` UTC date.
-const fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+pub(crate) const fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let shifted = days_since_epoch + 719_468;
     let era = if shifted >= 0 {
         shifted

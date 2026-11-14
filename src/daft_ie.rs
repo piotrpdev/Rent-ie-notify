@@ -41,6 +41,8 @@ struct ListingData {
     num_bathrooms: Option<String>,
     #[nserde(rename = "propertyType")]
     property_type: Option<String>,
+    #[nserde(default)]
+    sections: Vec<String>,
     media: Option<ListingMedia>,
     point: Option<GeoPoint>,
     #[nserde(rename = "seoFriendlyPath")]
@@ -76,6 +78,7 @@ fn listing_from_data(listing: ListingData) -> Listing {
         num_bedrooms,
         num_bathrooms,
         property_type,
+        sections,
         media,
         point,
         seo_friendly_path,
@@ -98,6 +101,14 @@ fn listing_from_data(listing: ListingData) -> Listing {
             longitude,
         })
     });
+    let detail_property_type = if sections
+        .iter()
+        .any(|section| section.eq_ignore_ascii_case("Sharing"))
+    {
+        "rooms-to-rent"
+    } else {
+        "houses-to-let"
+    };
 
     Listing {
         // rent.ie and daft.ie share the numeric listing ID space.
@@ -111,6 +122,13 @@ fn listing_from_data(listing: ListingData) -> Listing {
         price: price.trim().to_string(),
         date: publish_date.map(format_publish_date).unwrap_or_default(),
         description: format_description([num_bedrooms, num_bathrooms, property_type]),
+        available_from: String::new(),
+        minimum_lease: String::new(),
+        single_bedrooms: None,
+        double_bedrooms: None,
+        twin_bedrooms: None,
+        bathrooms: None,
+        detail_property_type: detail_property_type.to_string(),
     }
 }
 

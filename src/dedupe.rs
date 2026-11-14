@@ -67,6 +67,13 @@ mod tests {
             price: String::new(),
             date: String::new(),
             description: String::new(),
+            available_from: String::new(),
+            minimum_lease: String::new(),
+            single_bedrooms: None,
+            double_bedrooms: None,
+            twin_bedrooms: None,
+            bathrooms: None,
+            detail_property_type: "houses-to-let".to_string(),
         }
     }
 

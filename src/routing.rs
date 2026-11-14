@@ -1,14 +1,14 @@
-use std::{collections::HashMap, thread, time::Duration};
+use std::collections::HashMap;
 
 use nanoserde::{DeJson, SerJson};
 
+use crate::delay;
 use crate::listing::Listing;
 use crate::places::Place;
 
 const ORS_MATRIX_URL: &str = "https://api.openrouteservice.org/v2/matrix/driving-car";
 const MAX_MATRIX_LOCATIONS: usize = 50;
 const MAX_ORIGINS_PER_BATCH: usize = 40;
-const ROUTING_REQUEST_DELAY: Duration = Duration::from_secs(1);
 
 pub(crate) type RouteMap = HashMap<String, Vec<Option<RouteMeasurement>>>;
 
@@ -138,7 +138,7 @@ pub(crate) fn fetch_routes(listings: &[Listing], places: &[Place], api_key: &str
         }
 
         if batch_index + 1 < batch_count {
-            thread::sleep(ROUTING_REQUEST_DELAY);
+            delay::sleep();
         }
     }
 

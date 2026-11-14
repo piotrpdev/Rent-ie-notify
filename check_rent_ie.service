@@ -21,6 +21,10 @@ Environment=DAFT_IE_REQUEST='{"section":"xxxx","filters":[{"name":"adState","val
 # Environment=PLACES_OF_INTEREST='[{"name":"Work","latitude":xxxx,"longitude":xxxx}]'
 # Optional: OpenRouteService API key for driving times/distances.
 # Environment=OPENROUTESERVICE_API_KEY='xxxx'
+# Optional: write timestamped grouped text reports to this directory.
+# Environment=TEXT_REPORT_DIR='reports'
+# Set to 1 to include every unique listing in each report instead of only new ones.
+# Environment=TEXT_REPORT_INCLUDE_ALL='1'
 Environment=SLACK_WEBHOOK_URL='https://hooks.slack.com/services/xxx/xxx/xxxxxx'
 
 [Install]
