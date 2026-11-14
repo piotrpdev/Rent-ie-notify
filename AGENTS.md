@@ -38,7 +38,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 - rent.ie `seoFriendlyPath` is a `/share/<slug>/<id>` path that 404s. Links are constructed as `https://www.rent.ie/<pageProps.propertyType>/<slug>/<id>/`; the section varies (`rooms-to-rent`, `houses-to-let`, etc.).
 - daft.ie uses a POST to `https://gateway.daft.ie/api/v2/ads/listings`. `DAFT_IE_REQUEST` is the JSON request body; it needs `accept`/`content-type`, `brand: daft`, `platform: web`, `origin`, and `referer` (set in `main.rs`). Browser-only `sec-*`/`user-agent` headers aren't required; omitting brand/platform returns 400 and omitting origin/referer gets a 403. The gateway caps `pageSize` at 50 and pagination follows `paging.nextFrom`, rewriting only the request body's `paging.from` value.
 - Both search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`. The rent.ie `property.json` / daft property endpoints have descriptions but cost one extra request per new listing.
-- Paginated API calls sleep for `PAGE_REQUEST_DELAY` (1 second) between pages to avoid rate limiting.
+- rent.ie and daft.ie are fetched concurrently on separate threads. Pagination within each source stays sequential and sleeps for `PAGE_REQUEST_DELAY` (1 second) between pages to avoid rate limiting.
 - Search API `publishDate` is epoch milliseconds and is converted to a UTC `YYYY-MM-DD` date.
 - A 403 from rent.ie or daft.ie is likely Cloudflare; the rent.ie error in `main.rs` suggests retrying from a residential IP.
 - `Cargo.toml` forbids `unsafe_code` and denies clippy `unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `todo`, and `unimplemented`; follow the existing `Result`/`Option` style.

@@ -28,7 +28,7 @@ fn parse_sent_ids(content: &str) -> Vec<String> {
         .collect()
 }
 
-fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<Vec<Listing>, Box<dyn std::error::Error>> {
+fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<Vec<Listing>, String> {
     // `_next/data` URLs include a deployment-specific build ID that is only
     // published in the search page's `__NEXT_DATA__` metadata.
     println!("Fetching rent.ie search page metadata...");
@@ -40,8 +40,7 @@ fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<Vec<Listing>, Box<dyn std
         return Err(format!(
             "Failed to fetch rent.ie search page: received status code {}. Cloudflare may be blocking the request, try from a residential IP?",
             response.status_code,
-        )
-        .into());
+        ));
     }
 
     let html_response = response
@@ -71,8 +70,7 @@ fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<Vec<Listing>, Box<dyn std
             return Err(format!(
                 "Failed to fetch rent.ie listings from API: received status code {}",
                 api_response.status_code,
-            )
-            .into());
+            ));
         }
 
         let api_json = api_response
@@ -93,7 +91,7 @@ fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<Vec<Listing>, Box<dyn std
     Ok(listings)
 }
 
-fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, Box<dyn std::error::Error>> {
+fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, String> {
     let mut listings = Vec::new();
     let mut request_body = request_body.to_string();
 
@@ -116,8 +114,7 @@ fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, Box<dyn st
             return Err(format!(
                 "Failed to fetch daft.ie listings from API: received status code {}",
                 response.status_code,
-            )
-            .into());
+            ));
         }
 
         let json = response
@@ -150,13 +147,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Set RENT_IE_URL and/or DAFT_IE_REQUEST".into());
     }
 
-    let mut listings = Vec::new();
-    if let Some(rent_ie_url) = rent_ie_url {
-        listings.extend(fetch_rent_ie_listings(&rent_ie_url)?);
-    }
-    if let Some(daft_ie_request) = daft_ie_request {
-        listings.extend(fetch_daft_ie_listings(&daft_ie_request)?);
-    }
+    // Fetch both sources concurrently. Pagination remains sequential within each
+    // source so we don't burst the same host with parallel requests.
+    let rent_thread = rent_ie_url.map(|url| thread::spawn(move || fetch_rent_ie_listings(&url)));
+    let daft_thread =
+        daft_ie_request.map(|body| thread::spawn(move || fetch_daft_ie_listings(&body)));
+
+    let rent_result = match rent_thread {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| "rent.ie fetch thread panicked".to_string())?,
+        None => Ok(Vec::new()),
+    };
+    let daft_result = match daft_thread {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| "daft.ie fetch thread panicked".to_string())?,
+        None => Ok(Vec::new()),
+    };
+
+    let mut listings = rent_result?;
+    listings.extend(daft_result?);
 
     let listing_count = listings.len();
     let groups = dedupe::group_listings(listings);
