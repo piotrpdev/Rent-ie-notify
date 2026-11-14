@@ -59,6 +59,8 @@ struct ListingData {
     price: String,
     #[nserde(rename = "numBedrooms")]
     num_bedrooms: Option<String>,
+    #[nserde(rename = "numBathrooms")]
+    num_bathrooms: Option<String>,
     #[nserde(rename = "propertyType")]
     property_type: Option<String>,
     media: Option<ListingMedia>,
@@ -87,6 +89,7 @@ impl RentListing {
             title,
             price,
             num_bedrooms,
+            num_bathrooms,
             property_type,
             media,
             seo_friendly_path,
@@ -98,7 +101,7 @@ impl RentListing {
             .and_then(|image| image.thumbnail)
             .unwrap_or_default();
 
-        let description = [num_bedrooms, property_type]
+        let description = [num_bedrooms, num_bathrooms, property_type]
             .into_iter()
             .flatten()
             .map(|value| value.trim().to_string())
@@ -244,11 +247,38 @@ mod tests {
 
     const SEARCH_JSON: &str = r#"{"pageProps":{"propertyType":"rooms-to-rent","listings":[{"listing":{"id":6721798,"title":" Thomas Street, Waterford, Ferrybank, Co. Waterford","price":"€650 per month","numBedrooms":"Double Room","propertyType":"House","media":{"images":[{"size360x240":"https://media.rent.ie/example.jpg"}]},"seoFriendlyPath":"/share/thomas-street-waterford/6721798","publishDate":1794588353317}}]}}"#;
 
+    fn page_html(query: &str) -> String {
+        format!(
+            r#"<!DOCTYPE html><html><head><script id="__NEXT_DATA__" type="application/json">{{"buildId":"test-build","page":"/search/[[...rest]]","query":{query}}}</script></head><body></body></html>"#
+        )
+    }
+
     #[test]
     fn builds_the_search_api_url_from_page_data() -> Result<(), String> {
         assert_eq!(
             search_api_url(PAGE_HTML)?,
             "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre/room-type_either/sort-by_date-entered_down.json?propertyType=rooms-to-rent&county=waterford&areaFamily=locality&rest=waterford-city-centre&rest=room-type_either&rest=sort-by_date-entered_down"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn builds_api_urls_for_houses_and_rooms_searches() -> Result<(), String> {
+        let houses_html = page_html(
+            r#"{"propertyType":"houses-to-let","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre"]}"#,
+        );
+        assert_eq!(
+            search_api_url(&houses_html)?,
+            "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre.json?propertyType=houses-to-let&county=waterford&areaFamily=renting&rest=waterford-city-centre"
+        );
+
+        let rooms_html = page_html(
+            r#"{"propertyType":"rooms-to-rent","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre","room-type_either"]}"#,
+        );
+        assert_eq!(
+            search_api_url(&rooms_html)?,
+            "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre/room-type_either.json?propertyType=rooms-to-rent&county=waterford&areaFamily=renting&rest=waterford-city-centre&rest=room-type_either"
         );
 
         Ok(())
@@ -304,20 +334,43 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "uses the local archives/ fixture"]
-    fn parses_archived_search_response() -> Result<(), String> {
-        let json = std::fs::read_to_string("archives/search_waterford_city_centre.json")
-            .map_err(|e| format!("failed to read archived API response: {e}"))?;
-        let listings = extract_listings_from_json(&json)?;
+    #[ignore = "uses the local archives/ fixtures"]
+    fn parses_archived_search_responses() -> Result<(), String> {
+        let cases = [
+            (
+                "archives/search_waterford_city_centre.json",
+                "6721798",
+                "https://www.rent.ie/rooms-to-rent/",
+                "Double Room · House",
+            ),
+            (
+                "archives/search_waterford_city_centre_houses_to_let.json",
+                "6720949",
+                "https://www.rent.ie/houses-to-let/",
+                "3 Bed · 1 Bath · House",
+            ),
+            (
+                "archives/search_waterford_city_centre_rooms_to_rent.json",
+                "6721798",
+                "https://www.rent.ie/rooms-to-rent/",
+                "Double Room · House",
+            ),
+        ];
 
-        assert_eq!(listings.len(), 20);
-        let Some(first) = listings.first() else {
-            return Err("expected at least one listing".to_string());
-        };
-        assert_eq!(
-            first.link,
-            "https://www.rent.ie/rooms-to-rent/-thomas-street-waterford-ferrybank-co-waterford/6721798/"
-        );
+        for (path, expected_id, expected_prefix, expected_description) in cases {
+            let json =
+                std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
+            let listings = extract_listings_from_json(&json)?;
+
+            assert_eq!(listings.len(), 20, "{path}");
+            let Some(first) = listings.first() else {
+                return Err(format!("expected listings in {path}"));
+            };
+            assert_eq!(first.id, expected_id, "{path}");
+            assert!(first.link.starts_with(expected_prefix), "{path}");
+            assert!(first.link.ends_with(&format!("/{}/", first.id)), "{path}");
+            assert_eq!(first.description, expected_description, "{path}");
+        }
 
         Ok(())
     }
