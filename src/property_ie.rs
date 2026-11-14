@@ -114,7 +114,7 @@ fn listing_from_data(listing: ListingData, ad_type: &str) -> Listing {
     Listing {
         id: id.to_string(),
         source: ListingSource::Property,
-        link: absolute_url(&seo_friendly_path),
+        link: listing_url(ad_type, &seo_friendly_path, id),
         img_url,
         image_keys,
         coordinates: None,
@@ -132,14 +132,15 @@ fn listing_from_data(listing: ListingData, ad_type: &str) -> Listing {
     }
 }
 
-fn absolute_url(path: &str) -> String {
-    if path.starts_with("http://") || path.starts_with("https://") {
-        path.to_string()
-    } else if path.starts_with('/') {
-        format!("{PROPERTY_IE_BASE_URL}{path}")
-    } else {
-        format!("{PROPERTY_IE_BASE_URL}/{path}")
-    }
+fn listing_url(ad_type: &str, seo_friendly_path: &str, listing_id: u64) -> String {
+    let slug = seo_friendly_path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .nth(1)
+        .unwrap_or_default()
+        .trim_matches('-');
+
+    format!("{PROPERTY_IE_BASE_URL}/{ad_type}/{slug}/{listing_id}/")
 }
 
 fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
@@ -209,7 +210,7 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<(Vec<Listing>, Option
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_page_from_json, search_api_url};
+    use super::{extract_page_from_json, listing_url, search_api_url};
 
     const PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html>
@@ -231,6 +232,18 @@ mod tests {
     }
 
     #[test]
+    fn builds_public_property_urls() {
+        assert_eq!(
+            listing_url(
+                "property-to-let",
+                "/for-rent/-barrack-street-waterford-waterford-city-centre-co-waterford/6719091",
+                6_719_091
+            ),
+            "https://www.property.ie/property-to-let/barrack-street-waterford-waterford-city-centre-co-waterford/6719091/"
+        );
+    }
+
+    #[test]
     fn extracts_a_property_ie_listing() -> Result<(), String> {
         let (listings, next_page) = extract_page_from_json(SEARCH_JSON)?;
         assert_eq!(listings.len(), 1);
@@ -242,7 +255,7 @@ mod tests {
         assert_eq!(listing.id, "6721266");
         assert_eq!(
             listing.link,
-            "https://www.property.ie/for-rent/lakunda-west-street-tallow-co-waterford/6721266"
+            "https://www.property.ie/property-to-let/lakunda-west-street-tallow-co-waterford/6721266/"
         );
         assert_eq!(
             listing.address,

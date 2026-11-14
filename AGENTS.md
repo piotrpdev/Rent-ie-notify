@@ -23,7 +23,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 
 ## Commands
 
-- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (30 unit tests, plus 3 ignored archive-backed tests).
+- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (31 unit tests, plus 3 ignored archive-backed tests).
 - Check everything: `scripts/check.sh` (also runs the archive tests and release build).
 - Archive check: `cargo test --locked -- --ignored` (parses the rent.ie and daft.ie fixtures in `archives/`).
 - Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`/`PROPERTY_IE_URL`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.
@@ -42,7 +42,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - Image keys are decoded from the base64 media URL descriptor's `key` field. Duplicates are grouped across sources by shared ID or intersecting image keys; image-key matches within the same source are ignored so reused/stock photos do not merge distinct ads. The first source configured provides the Slack representative.
 - rent.ie `seoFriendlyPath` is a `/share/<slug>/<id>` path that 404s. Links are constructed as `https://www.rent.ie/<pageProps.propertyType>/<slug>/<id>/`; the section varies (`rooms-to-rent`, `houses-to-let`, etc.).
 - daft.ie uses a POST to `https://gateway.daft.ie/api/v2/ads/listings`. `DAFT_IE_REQUEST` is the JSON request body; it needs `accept`/`content-type`, `brand: daft`, `platform: web`, `origin`, and `referer` (set in `main.rs`). Browser-only `sec-*`/`user-agent` headers aren't required; omitting brand/platform returns 400 and omitting origin/referer gets a 403. The gateway caps `pageSize` at 50 and pagination follows `paging.nextFrom`, rewriting only the request body's `paging.from` value.
-- All HTTP calls use reqwest blocking. property.ie requires HTTP/2; its HTML/API requests return 403 over HTTP/1.1. Property details/coordinates are fetched through the rent.ie property endpoint, which also accepts property.ie IDs.
+- All HTTP calls use reqwest blocking. property.ie requires HTTP/2; its HTML/API requests return 403 over HTTP/1.1. Property details/coordinates are fetched through the rent.ie property endpoint, which also accepts property.ie IDs. Its `seoFriendlyPath` is `/for-rent/<slug>/<id>`; public links are built as `https://www.property.ie/<adType>/<slug>/<id>/` with leading/trailing hyphens trimmed.
 - All search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`.
 - For each new group representative, `rent_ie::property_details_url`/`extract_details_from_json` fetch `propertyOverview` from the rent.ie property endpoint (it works for daft.ie and property.ie IDs too). Missing values omit the `Available from`/`Minimum lease` lines; individual detail failures are logged and do not fail the run.
 - All configured sources are fetched concurrently on separate threads. Pagination and property-detail requests stay sequential and call `delay::sleep()` (1 second plus up to 500 ms of jitter) between requests to avoid rate limiting/bot detection.
