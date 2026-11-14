@@ -1,3 +1,6 @@
 /target
 sent_ids.txt
 opencode.json
+
+__pycache__/
+*.py[cod]

@@ -1,4 +1,4 @@
-use std::{env, fs::OpenOptions, io::Write};
+use std::{env, fs::OpenOptions, io::Write, thread, time::Duration};
 
 use crate::listing::Listing;
 
@@ -9,6 +9,11 @@ pub mod slack;
 
 const SENT_IDS_FILENAME: &str = "sent_ids.txt";
 const DAFT_IE_REQUEST_ENV: &str = "DAFT_IE_REQUEST";
+// Slack allows at most 50 Block Kit blocks per message. Each listing uses a
+// section plus a divider, so 20 listings is 39 blocks, leaving some headroom.
+const SLACK_LISTINGS_PER_MESSAGE: usize = 20;
+// Pause between paginated API calls so we don't trigger rate limits.
+const PAGE_REQUEST_DELAY: Duration = Duration::from_secs(1);
 
 fn parse_sent_ids(content: &str) -> Vec<String> {
     // Older versions stored "<slug>/<id>"; rent.ie and daft.ie now expose numeric IDs.
@@ -44,54 +49,93 @@ fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<Vec<Listing>, Box<dyn std
     let search_api_url = rent_ie::search_api_url(html_response)
         .map_err(|e| format!("Failed to build rent.ie API URL: {e}"))?;
 
-    println!("Fetching rent.ie listings from API...");
-    let api_response = minreq::get(search_api_url)
-        .send()
-        .map_err(|e| format!("Failed to fetch rent.ie listings from API: {e}"))?;
+    // rent.ie ignores pageSize/page_size, so paging is the only way to fetch
+    // more than the first 20 results.
+    let mut listings = Vec::new();
+    let mut next_page = None;
 
-    if api_response.status_code != 200 {
-        return Err(format!(
-            "Failed to fetch rent.ie listings from API: received status code {}",
-            api_response.status_code,
-        )
-        .into());
+    loop {
+        let page_url = next_page.map_or_else(
+            || search_api_url.clone(),
+            |page| format!("{search_api_url}&page={page}"),
+        );
+
+        println!("Fetching rent.ie listings from API...");
+        let api_response = minreq::get(page_url)
+            .send()
+            .map_err(|e| format!("Failed to fetch rent.ie listings from API: {e}"))?;
+
+        if api_response.status_code != 200 {
+            return Err(format!(
+                "Failed to fetch rent.ie listings from API: received status code {}",
+                api_response.status_code,
+            )
+            .into());
+        }
+
+        let api_json = api_response
+            .as_str()
+            .map_err(|e| format!("Failed to read API response body: {e}"))?;
+
+        let (page_listings, page_next) = rent_ie::extract_page_from_json(api_json)
+            .map_err(|e| format!("Failed to extract rent.ie listings from API response: {e}"))?;
+        listings.extend(page_listings);
+
+        let Some(page_next) = page_next else {
+            break;
+        };
+        thread::sleep(PAGE_REQUEST_DELAY);
+        next_page = Some(page_next);
     }
 
-    let api_json = api_response
-        .as_str()
-        .map_err(|e| format!("Failed to read API response body: {e}"))?;
-
-    rent_ie::extract_listings_from_json(api_json)
-        .map_err(|e| format!("Failed to extract rent.ie listings from API response: {e}").into())
+    Ok(listings)
 }
 
 fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, Box<dyn std::error::Error>> {
-    println!("Fetching daft.ie listings from API...");
-    let response = minreq::post(daft_ie::API_URL)
-        .with_header("accept", "application/json")
-        .with_header("brand", "daft")
-        .with_header("content-type", "application/json")
-        .with_header("origin", "https://www.daft.ie")
-        .with_header("platform", "web")
-        .with_header("referer", "https://www.daft.ie/")
-        .with_body(request_body.to_string())
-        .send()
-        .map_err(|e| format!("Failed to fetch daft.ie listings from API: {e}"))?;
+    let mut listings = Vec::new();
+    let mut request_body = request_body.to_string();
 
-    if response.status_code != 200 {
-        return Err(format!(
-            "Failed to fetch daft.ie listings from API: received status code {}",
-            response.status_code,
-        )
-        .into());
+    loop {
+        println!("Fetching daft.ie listings from API...");
+        // The daft gateway is strict about browser-like headers: without
+        // brand/platform it returns 400, and without origin/referer it returns 403.
+        let response = minreq::post(daft_ie::API_URL)
+            .with_header("accept", "application/json")
+            .with_header("brand", "daft")
+            .with_header("content-type", "application/json")
+            .with_header("origin", "https://www.daft.ie")
+            .with_header("platform", "web")
+            .with_header("referer", "https://www.daft.ie/")
+            .with_body(request_body.clone())
+            .send()
+            .map_err(|e| format!("Failed to fetch daft.ie listings from API: {e}"))?;
+
+        if response.status_code != 200 {
+            return Err(format!(
+                "Failed to fetch daft.ie listings from API: received status code {}",
+                response.status_code,
+            )
+            .into());
+        }
+
+        let json = response
+            .as_str()
+            .map_err(|e| format!("Failed to read daft.ie API response body: {e}"))?;
+
+        let (page_listings, next_from) = daft_ie::extract_page_from_json(json)
+            .map_err(|e| format!("Failed to extract daft.ie listings from API response: {e}"))?;
+        listings.extend(page_listings);
+
+        let Some(next_from) = next_from else {
+            break;
+        };
+
+        request_body = daft_ie::request_body_with_offset(&request_body, next_from)
+            .map_err(|e| format!("Failed to update daft.ie paging: {e}"))?;
+        thread::sleep(PAGE_REQUEST_DELAY);
     }
 
-    let json = response
-        .as_str()
-        .map_err(|e| format!("Failed to read daft.ie API response body: {e}"))?;
-
-    daft_ie::extract_listings_from_json(json)
-        .map_err(|e| format!("Failed to extract daft.ie listings from API response: {e}").into())
+    Ok(listings)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -134,17 +178,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        println!(
-            "Sending {} new {source} listings to Slack...",
-            filtered_listings.len()
-        );
-        let slack_message_json = slack::listings_to_slack_message_json(&filtered_listings);
+        for chunk in filtered_listings.chunks(SLACK_LISTINGS_PER_MESSAGE) {
+            println!("Sending {} new {source} listings to Slack...", chunk.len());
+            let slack_message_json = slack::listings_to_slack_message_json(chunk);
 
-        minreq::post(&slack_webhook_url)
-            .with_header("Content-Type", "application/json")
-            .with_body(slack_message_json)
-            .send()
-            .map_err(|e| format!("Failed to send {source} message to Slack: {e}"))?;
+            minreq::post(&slack_webhook_url)
+                .with_header("Content-Type", "application/json")
+                .with_body(slack_message_json)
+                .send()
+                .map_err(|e| format!("Failed to send {source} message to Slack: {e}"))?;
+        }
 
         new_ids.extend(filtered_listings.iter().map(|listing| listing.id.clone()));
     }

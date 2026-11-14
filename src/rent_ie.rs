@@ -36,6 +36,15 @@ struct SearchPageProps {
     listings: Vec<SearchResult>,
     #[nserde(rename = "propertyType")]
     property_type: String,
+    paging: Option<Paging>,
+}
+
+#[derive(Debug, DeJson)]
+struct Paging {
+    #[nserde(rename = "currentPage")]
+    current_page: u32,
+    #[nserde(rename = "totalPages")]
+    total_pages: u32,
 }
 
 #[derive(Debug, DeJson)]
@@ -168,23 +177,30 @@ pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
     Ok(url)
 }
 
-pub(crate) fn extract_listings_from_json(json: &str) -> Result<Vec<Listing>, String> {
+pub(crate) fn extract_page_from_json(json: &str) -> Result<(Vec<Listing>, Option<u32>), String> {
     let data: SearchData =
         SearchData::deserialize_json(json).map_err(|e| format!("Failed to parse API JSON: {e}"))?;
     let SearchPageProps {
         listings,
         property_type,
+        paging,
     } = data.page_props;
 
-    Ok(listings
+    let next_page = paging.and_then(|paging| {
+        (paging.current_page < paging.total_pages).then_some(paging.current_page + 1)
+    });
+
+    let listings = listings
         .into_iter()
         .map(|search_result| listing_from_data(search_result.listing, &property_type))
-        .collect())
+        .collect();
+
+    Ok((listings, next_page))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_listings_from_json, listing_url, search_api_url};
+    use super::{extract_page_from_json, listing_url, search_api_url};
 
     const PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html>
@@ -256,7 +272,7 @@ mod tests {
 
     #[test]
     fn extracts_listing_from_api_json() -> Result<(), String> {
-        let listings = extract_listings_from_json(SEARCH_JSON)?;
+        let (listings, _) = extract_page_from_json(SEARCH_JSON)?;
         assert_eq!(listings.len(), 1);
 
         let Some(listing) = listings.first() else {
@@ -276,6 +292,19 @@ mod tests {
         assert_eq!(listing.price, "€650 per month");
         assert_eq!(listing.date, "2026-11-13");
         assert_eq!(listing.description, "Double Room · House");
+
+        Ok(())
+    }
+
+    #[test]
+    fn extracts_the_next_page_from_paging() -> Result<(), String> {
+        let json = r#"{"pageProps":{"propertyType":"rooms-to-rent","paging":{"currentPage":2,"totalPages":3},"listings":[]}}"#;
+        let (_, next_page) = extract_page_from_json(json)?;
+        assert_eq!(next_page, Some(3));
+
+        let json = r#"{"pageProps":{"propertyType":"rooms-to-rent","paging":{"currentPage":3,"totalPages":3},"listings":[]}}"#;
+        let (_, next_page) = extract_page_from_json(json)?;
+        assert_eq!(next_page, None);
 
         Ok(())
     }
@@ -341,7 +370,7 @@ mod tests {
         for (path, expected_count, expected_id, expected_prefix, expected_description) in cases {
             let json =
                 std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
-            let listings = extract_listings_from_json(&json)?;
+            let (listings, _) = extract_page_from_json(&json)?;
 
             assert_eq!(listings.len(), expected_count, "{path}");
             let Some(first) = listings.first() else {
@@ -352,6 +381,14 @@ mod tests {
             assert!(first.link.ends_with(&format!("/{}/", first.id)), "{path}");
             assert_eq!(first.description, expected_description, "{path}");
         }
+
+        let page_two = std::fs::read_to_string(
+            "archives/rentie/search_waterford_city_centre_houses_to_let_page_2.json",
+        )
+        .map_err(|e| format!("failed to read rent.ie page 2 fixture: {e}"))?;
+        let (listings, next_page) = extract_page_from_json(&page_two)?;
+        assert_eq!(listings.len(), 20);
+        assert_eq!(next_page, Some(3));
 
         Ok(())
     }

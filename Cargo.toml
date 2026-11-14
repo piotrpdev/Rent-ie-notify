@@ -32,3 +32,7 @@ indexing_slicing = "deny"
 float_cmp = "deny"
 modulo_one = "deny"
 struct_field_names = "allow"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tiny_http = "0.12.0"
