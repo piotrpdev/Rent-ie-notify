@@ -53,24 +53,23 @@ fn fetch_batch(listings: &[&Listing], places: &[Place], api_key: &str) -> Result
     };
     let body = request.serialize_json();
 
-    let response = minreq::post(ORS_MATRIX_URL)
-        .with_header("Authorization", api_key)
-        .with_header("Content-Type", "application/json")
-        .with_body(body)
+    let response = reqwest::blocking::Client::new()
+        .post(ORS_MATRIX_URL)
+        .header("Authorization", api_key)
+        .header("Content-Type", "application/json")
+        .body(body)
         .send()
         .map_err(|error| format!("OpenRouteService request failed: {error}"))?;
 
-    if response.status_code != 200 {
-        return Err(format!(
-            "OpenRouteService returned status {}",
-            response.status_code
-        ));
+    let status = response.status().as_u16();
+    if status != 200 {
+        return Err(format!("OpenRouteService returned status {status}"));
     }
 
     let json = response
-        .as_str()
+        .text()
         .map_err(|error| format!("Failed to read OpenRouteService response: {error}"))?;
-    let data: MatrixResponse = MatrixResponse::deserialize_json(json)
+    let data: MatrixResponse = MatrixResponse::deserialize_json(&json)
         .map_err(|error| format!("Failed to parse OpenRouteService response: {error}"))?;
 
     let mut routes = RouteMap::new();

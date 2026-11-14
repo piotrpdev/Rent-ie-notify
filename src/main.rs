@@ -34,24 +34,26 @@ fn parse_sent_ids(content: &str) -> Vec<String> {
 fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<(Vec<Listing>, String), String> {
     // `_next/data` URLs include a deployment-specific build ID that is only
     // published in the search page's `__NEXT_DATA__` metadata.
+    let client = reqwest::blocking::Client::new();
     println!("Fetching rent.ie search page metadata...");
-    let response = minreq::get(rent_ie_url)
+    let response = client
+        .get(rent_ie_url)
         .send()
         .map_err(|e| format!("Failed to fetch rent.ie search page: {e}"))?;
 
-    if response.status_code != 200 {
+    let status = response.status().as_u16();
+    if status != 200 {
         return Err(format!(
-            "Failed to fetch rent.ie search page: received status code {}. Cloudflare may be blocking the request, try from a residential IP?",
-            response.status_code,
+            "Failed to fetch rent.ie search page: received status code {status}. Cloudflare may be blocking the request, try from a residential IP?",
         ));
     }
 
     let html_response = response
-        .as_str()
+        .text()
         .map_err(|e| format!("Failed to read search page body: {e}"))?;
 
-    let build_id = rent_ie::build_id_from_html(html_response)?;
-    let search_api_url = rent_ie::search_api_url(html_response)
+    let build_id = rent_ie::build_id_from_html(&html_response)?;
+    let search_api_url = rent_ie::search_api_url(&html_response)
         .map_err(|e| format!("Failed to build rent.ie API URL: {e}"))?;
 
     // rent.ie ignores pageSize/page_size, so paging is the only way to fetch
@@ -66,22 +68,23 @@ fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<(Vec<Listing>, String), S
         );
 
         println!("Fetching rent.ie listings from API...");
-        let api_response = minreq::get(page_url)
+        let api_response = client
+            .get(page_url)
             .send()
             .map_err(|e| format!("Failed to fetch rent.ie listings from API: {e}"))?;
 
-        if api_response.status_code != 200 {
+        let status = api_response.status().as_u16();
+        if status != 200 {
             return Err(format!(
-                "Failed to fetch rent.ie listings from API: received status code {}",
-                api_response.status_code,
+                "Failed to fetch rent.ie listings from API: received status code {status}",
             ));
         }
 
         let api_json = api_response
-            .as_str()
+            .text()
             .map_err(|e| format!("Failed to read API response body: {e}"))?;
 
-        let (page_listings, page_next) = rent_ie::extract_page_from_json(api_json)
+        let (page_listings, page_next) = rent_ie::extract_page_from_json(&api_json)
             .map_err(|e| format!("Failed to extract rent.ie listings from API response: {e}"))?;
         listings.extend(page_listings);
 
@@ -96,6 +99,7 @@ fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<(Vec<Listing>, String), S
 }
 
 fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, String> {
+    let client = reqwest::blocking::Client::new();
     let mut listings = Vec::new();
     let mut request_body = request_body.to_string();
 
@@ -103,29 +107,30 @@ fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, String> {
         println!("Fetching daft.ie listings from API...");
         // The daft gateway is strict about browser-like headers: without
         // brand/platform it returns 400, and without origin/referer it returns 403.
-        let response = minreq::post(daft_ie::API_URL)
-            .with_header("accept", "application/json")
-            .with_header("brand", "daft")
-            .with_header("content-type", "application/json")
-            .with_header("origin", "https://www.daft.ie")
-            .with_header("platform", "web")
-            .with_header("referer", "https://www.daft.ie/")
-            .with_body(request_body.clone())
+        let response = client
+            .post(daft_ie::API_URL)
+            .header("accept", "application/json")
+            .header("brand", "daft")
+            .header("content-type", "application/json")
+            .header("origin", "https://www.daft.ie")
+            .header("platform", "web")
+            .header("referer", "https://www.daft.ie/")
+            .body(request_body.clone())
             .send()
             .map_err(|e| format!("Failed to fetch daft.ie listings from API: {e}"))?;
 
-        if response.status_code != 200 {
+        let status = response.status().as_u16();
+        if status != 200 {
             return Err(format!(
-                "Failed to fetch daft.ie listings from API: received status code {}",
-                response.status_code,
+                "Failed to fetch daft.ie listings from API: received status code {status}",
             ));
         }
 
         let json = response
-            .as_str()
+            .text()
             .map_err(|e| format!("Failed to read daft.ie API response body: {e}"))?;
 
-        let (page_listings, next_from) = daft_ie::extract_page_from_json(json)
+        let (page_listings, next_from) = daft_ie::extract_page_from_json(&json)
             .map_err(|e| format!("Failed to extract daft.ie listings from API response: {e}"))?;
         listings.extend(page_listings);
 
@@ -142,8 +147,7 @@ fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, String> {
 }
 
 fn fetch_property_ie_listings(property_ie_url: &str) -> Result<Vec<Listing>, String> {
-    // property.ie only serves its pages over HTTP/2; minreq's HTTP/1.1 requests
-    // get a 403 from Cloudflare, so use reqwest for this source.
+    // property.ie requires HTTP/2; Cloudflare returns 403 for HTTP/1.1 requests.
     let client = reqwest::blocking::Client::builder()
         .user_agent(property_ie::USER_AGENT)
         .build()
@@ -251,47 +255,49 @@ fn fetch_all_sources(
 }
 
 fn fetch_rent_build_id() -> Result<String, String> {
-    let response = minreq::get("https://www.rent.ie/")
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .get("https://www.rent.ie/")
         .send()
         .map_err(|error| format!("Failed to fetch rent.ie homepage: {error}"))?;
 
-    if response.status_code != 200 {
+    let status = response.status().as_u16();
+    if status != 200 {
         return Err(format!(
-            "Failed to fetch rent.ie homepage: received status code {}",
-            response.status_code
+            "Failed to fetch rent.ie homepage: received status code {status}"
         ));
     }
 
     let html = response
-        .as_str()
+        .text()
         .map_err(|error| format!("Failed to read rent.ie homepage: {error}"))?;
 
-    rent_ie::build_id_from_html(html)
+    rent_ie::build_id_from_html(&html)
 }
 
 fn add_listing_details(listings: &mut [Listing], build_id: &str) {
     let count = listings.len();
+    let client = reqwest::blocking::Client::new();
     println!("Fetching property availability details...");
 
     for (index, listing) in listings.iter_mut().enumerate() {
         let result = (|| -> Result<(), String> {
             let url = rent_ie::property_details_url(build_id, listing)?;
-            let response = minreq::get(url)
-                .with_header("accept", "application/json")
+            let response = client
+                .get(url)
+                .header("accept", "application/json")
                 .send()
                 .map_err(|error| format!("Failed to fetch property details: {error}"))?;
 
-            if response.status_code != 200 {
-                return Err(format!(
-                    "property details returned status {}",
-                    response.status_code
-                ));
+            let status = response.status().as_u16();
+            if status != 200 {
+                return Err(format!("property details returned status {status}"));
             }
 
             let json = response
-                .as_str()
+                .text()
                 .map_err(|error| format!("Failed to read property details: {error}"))?;
-            let details = rent_ie::extract_details_from_json(json)?;
+            let details = rent_ie::extract_details_from_json(&json)?;
             listing.available_from = details.available_from;
             listing.minimum_lease = details.minimum_lease;
             listing.single_bedrooms = details.single_bedrooms;
@@ -330,13 +336,15 @@ fn send_slack_listings(
     places: &[crate::places::Place],
     routes: &routing::RouteMap,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::blocking::Client::new();
     for chunk in listings.chunks(SLACK_LISTINGS_PER_MESSAGE) {
         println!("Sending {} new listings to Slack...", chunk.len());
         let slack_message_json = slack::listings_to_slack_message_json(chunk, places, routes);
 
-        minreq::post(webhook_url)
-            .with_header("Content-Type", "application/json")
-            .with_body(slack_message_json)
+        client
+            .post(webhook_url)
+            .header("Content-Type", "application/json")
+            .body(slack_message_json)
             .send()
             .map_err(|e| format!("Failed to send message to Slack: {e}"))?;
     }
