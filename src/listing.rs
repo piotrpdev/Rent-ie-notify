@@ -8,6 +8,12 @@ pub(crate) enum ListingSource {
     DaftIe,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Coordinates {
+    pub(crate) latitude: f64,
+    pub(crate) longitude: f64,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Listing {
     pub(crate) id: String,
@@ -15,6 +21,7 @@ pub(crate) struct Listing {
     pub(crate) link: String,
     pub(crate) img_url: String,
     pub(crate) image_keys: Vec<String>,
+    pub(crate) coordinates: Option<Coordinates>,
     pub(crate) address: String,
     pub(crate) price: String,
     pub(crate) date: String,

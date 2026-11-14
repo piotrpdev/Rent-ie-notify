@@ -111,6 +111,7 @@ fn listing_from_data(listing: ListingData, section: &str) -> Listing {
         link: listing_url(section, &seo_friendly_path, id),
         img_url,
         image_keys,
+        coordinates: None,
         address: title.trim().to_string(),
         price: price.trim().to_string(),
         date: publish_date.map(format_publish_date).unwrap_or_default(),

@@ -17,6 +17,8 @@ RestartSec=5s
 Environment=RENT_IE_URL='https://www.rent.ie/rooms-to-rent/xxxx/xxxx/room-type_either/sort-by_date-entered_down/'
 # Optional daft.ie source: JSON request body for gateway.daft.ie.
 Environment=DAFT_IE_REQUEST='{"section":"xxxx","filters":[{"name":"adState","values":["published"]}],"andFilters":[],"ranges":[{"from":"xxxx","to":"xxxx","name":"numBeds"},{"from":"xxxx","to":"xxxx","name":"rentalPrice"}],"paging":{"from":"0","pageSize":"200"},"geoFilter":{"storedShapeIds":["xxxx"],"geoSearchType":"STORED_SHAPES"},"terms":""}'
+# Optional: JSON array of named places for distance lines.
+# Environment=PLACES_OF_INTEREST='[{"name":"Work","latitude":xxxx,"longitude":xxxx}]'
 Environment=SLACK_WEBHOOK_URL='https://hooks.slack.com/services/xxx/xxx/xxxxxx'
 
 [Install]

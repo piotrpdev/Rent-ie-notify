@@ -1,7 +1,8 @@
 use nanoserde::DeJson;
 
 use crate::listing::{
-    Listing, ListingSource, extract_image_keys, format_description, format_publish_date,
+    Coordinates, Listing, ListingSource, extract_image_keys, format_description,
+    format_publish_date,
 };
 
 pub(crate) const API_URL: &str = "https://gateway.daft.ie/api/v2/ads/listings";
@@ -41,10 +42,16 @@ struct ListingData {
     #[nserde(rename = "propertyType")]
     property_type: Option<String>,
     media: Option<ListingMedia>,
+    point: Option<GeoPoint>,
     #[nserde(rename = "seoFriendlyPath")]
     seo_friendly_path: String,
     #[nserde(rename = "publishDate")]
     publish_date: Option<u64>,
+}
+
+#[derive(Debug, DeJson)]
+struct GeoPoint {
+    coordinates: Vec<f64>,
 }
 
 #[derive(Debug, DeJson)]
@@ -70,6 +77,7 @@ fn listing_from_data(listing: ListingData) -> Listing {
         num_bathrooms,
         property_type,
         media,
+        point,
         seo_friendly_path,
         publish_date,
     } = listing;
@@ -81,6 +89,15 @@ fn listing_from_data(listing: ListingData) -> Listing {
         .collect();
     let img_url = image_urls.first().cloned().unwrap_or_default();
     let image_keys = extract_image_keys(&image_urls);
+    let coordinates = point.and_then(|point| {
+        let longitude = point.coordinates.first().copied()?;
+        let latitude = point.coordinates.get(1).copied()?;
+
+        Some(Coordinates {
+            latitude,
+            longitude,
+        })
+    });
 
     Listing {
         // rent.ie and daft.ie share the numeric listing ID space.
@@ -89,6 +106,7 @@ fn listing_from_data(listing: ListingData) -> Listing {
         link: absolute_url(&seo_friendly_path),
         img_url,
         image_keys,
+        coordinates,
         address: title.trim().to_string(),
         price: price.trim().to_string(),
         date: publish_date.map(format_publish_date).unwrap_or_default(),

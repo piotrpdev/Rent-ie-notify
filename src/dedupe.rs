@@ -13,6 +13,16 @@ fn are_duplicates(left: &Listing, right: &Listing) -> bool {
 ///
 /// Listings are kept in input order, so the first source configured wins when
 /// representatives are chosen.
+pub(crate) fn representative(group: &[Listing]) -> Option<Listing> {
+    let mut representative = group.first()?.clone();
+
+    if representative.coordinates.is_none() {
+        representative.coordinates = group.iter().find_map(|candidate| candidate.coordinates);
+    }
+
+    Some(representative)
+}
+
 pub(crate) fn group_listings(mut listings: Vec<Listing>) -> Vec<Vec<Listing>> {
     let mut groups = Vec::new();
 
@@ -41,7 +51,7 @@ pub(crate) fn group_listings(mut listings: Vec<Listing>) -> Vec<Vec<Listing>> {
 
 #[cfg(test)]
 mod tests {
-    use super::group_listings;
+    use super::{group_listings, representative};
     use crate::listing::{Listing, ListingSource};
     use crate::{daft_ie, rent_ie};
 
@@ -52,6 +62,7 @@ mod tests {
             link: String::new(),
             img_url: String::new(),
             image_keys: image_keys.iter().map(ToString::to_string).collect(),
+            coordinates: None,
             address: String::new(),
             price: String::new(),
             date: String::new(),
@@ -144,6 +155,13 @@ mod tests {
                     .iter()
                     .any(|key| other.image_keys.contains(key))
             }));
+
+            let Some(representative) = representative(group) else {
+                continue;
+            };
+            if group.iter().any(|listing| listing.coordinates.is_some()) {
+                assert!(representative.coordinates.is_some());
+            }
         }
 
         Ok(())

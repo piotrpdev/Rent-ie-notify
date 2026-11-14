@@ -5,6 +5,7 @@ use crate::listing::Listing;
 pub mod daft_ie;
 pub mod dedupe;
 pub mod listing;
+pub mod places;
 pub mod rent_ie;
 pub mod slack;
 
@@ -147,6 +148,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Set RENT_IE_URL and/or DAFT_IE_REQUEST".into());
     }
 
+    let places = match env::var(places::ENV_VAR) {
+        Ok(value) => places::parse(&value)
+            .map_err(|error| format!("Failed to parse {}: {error}", places::ENV_VAR))?,
+        Err(_) => Vec::new(),
+    };
+
     // Fetch both sources concurrently. Pagination remains sequential within each
     // source so we don't burst the same host with parallel requests.
     let rent_thread = rent_ie_url.map(|url| thread::spawn(move || fetch_rent_ie_listings(&url)));
@@ -189,9 +196,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into_iter()
         .filter(|group| !group.iter().any(|listing| sent_ids.contains(&listing.id)))
         .collect();
-    let new_listings: Vec<&Listing> = new_groups
+    let new_listings: Vec<Listing> = new_groups
         .iter()
-        .filter_map(|group| group.first())
+        .filter_map(|group| dedupe::representative(group))
         .collect();
 
     if new_listings.is_empty() {
@@ -202,7 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for chunk in new_listings.chunks(SLACK_LISTINGS_PER_MESSAGE) {
         println!("Sending {} new listings to Slack...", chunk.len());
-        let slack_message_json = slack::listings_to_slack_message_json(chunk);
+        let slack_message_json = slack::listings_to_slack_message_json(chunk, &places);
 
         minreq::post(&slack_webhook_url)
             .with_header("Content-Type", "application/json")
