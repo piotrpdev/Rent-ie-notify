@@ -7,6 +7,7 @@ pub mod dedupe;
 pub mod delay;
 pub mod listing;
 pub mod places;
+pub mod property_ie;
 pub mod rent_ie;
 pub mod routing;
 pub mod slack;
@@ -138,6 +139,115 @@ fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, String> {
     }
 
     Ok(listings)
+}
+
+fn fetch_property_ie_listings(property_ie_url: &str) -> Result<Vec<Listing>, String> {
+    // property.ie only serves its pages over HTTP/2; minreq's HTTP/1.1 requests
+    // get a 403 from Cloudflare, so use reqwest for this source.
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(property_ie::USER_AGENT)
+        .build()
+        .map_err(|error| format!("Failed to create property.ie HTTP client: {error}"))?;
+
+    println!("Fetching property.ie search page metadata...");
+    let response = client
+        .get(property_ie_url)
+        .header(
+            "accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        )
+        .header("accept-language", "en-GB,en-US;q=0.9,en;q=0.8")
+        .header("referer", "https://www.property.ie/")
+        .send()
+        .map_err(|error| format!("Failed to fetch property.ie search page: {error}"))?;
+
+    let status = response.status().as_u16();
+    if status != 200 {
+        return Err(format!(
+            "Failed to fetch property.ie search page: received status code {status}"
+        ));
+    }
+
+    let html = response
+        .text()
+        .map_err(|error| format!("Failed to read property.ie search page: {error}"))?;
+    let search_api_url = property_ie::search_api_url(&html)?;
+
+    let mut listings = Vec::new();
+    let mut next_page = None;
+
+    loop {
+        let page_url = next_page.map_or_else(
+            || search_api_url.clone(),
+            |page| format!("{search_api_url}&page={page}"),
+        );
+
+        println!("Fetching property.ie listings from API...");
+        let api_response = client
+            .get(page_url)
+            .header("accept", "application/json")
+            .send()
+            .map_err(|error| format!("Failed to fetch property.ie listings: {error}"))?;
+
+        let status = api_response.status().as_u16();
+        if status != 200 {
+            return Err(format!(
+                "Failed to fetch property.ie listings: received status code {status}"
+            ));
+        }
+
+        let json = api_response
+            .text()
+            .map_err(|error| format!("Failed to read property.ie API response: {error}"))?;
+        let (page_listings, page_next) = property_ie::extract_page_from_json(&json)?;
+        listings.extend(page_listings);
+
+        let Some(page_next) = page_next else {
+            break;
+        };
+        delay::sleep();
+        next_page = Some(page_next);
+    }
+
+    Ok(listings)
+}
+
+fn fetch_all_sources(
+    rent_ie_url: Option<String>,
+    daft_ie_request: Option<String>,
+    property_ie_url: Option<String>,
+) -> Result<(Vec<Listing>, Option<String>), String> {
+    let rent_thread = rent_ie_url.map(|url| thread::spawn(move || fetch_rent_ie_listings(&url)));
+    let daft_thread =
+        daft_ie_request.map(|body| thread::spawn(move || fetch_daft_ie_listings(&body)));
+    let property_thread =
+        property_ie_url.map(|url| thread::spawn(move || fetch_property_ie_listings(&url)));
+
+    let rent_result: Result<(Vec<Listing>, Option<String>), String> = match rent_thread {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| "rent.ie fetch thread panicked".to_string())?
+            .map(|(listings, build_id)| (listings, Some(build_id))),
+        None => Ok((Vec::new(), None)),
+    };
+    let daft_result = match daft_thread {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| "daft.ie fetch thread panicked".to_string())?,
+        None => Ok(Vec::new()),
+    };
+    let property_result = match property_thread {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| "property.ie fetch thread panicked".to_string())?,
+        None => Ok(Vec::new()),
+    };
+
+    let (mut listings, rent_build_id) = rent_result?;
+    listings.extend(daft_result?);
+    listings.extend(property_result?);
+
+    Ok((listings, rent_build_id))
 }
 
 fn fetch_rent_build_id() -> Result<String, String> {
@@ -308,6 +418,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         env::var("SLACK_WEBHOOK_URL").map_err(|_| "Failed to get SLACK_WEBHOOK_URL env var")?;
     let rent_ie_url = env::var("RENT_IE_URL").ok();
     let daft_ie_request = env::var(DAFT_IE_REQUEST_ENV).ok();
+    let property_ie_url = env::var("PROPERTY_IE_URL").ok();
     let ors_api_key = env::var("OPENROUTESERVICE_API_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty());
@@ -316,8 +427,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|value| !value.trim().is_empty());
     let text_report_include_all = env_flag("TEXT_REPORT_INCLUDE_ALL");
 
-    if rent_ie_url.is_none() && daft_ie_request.is_none() {
-        return Err("Set RENT_IE_URL and/or DAFT_IE_REQUEST".into());
+    if rent_ie_url.is_none() && daft_ie_request.is_none() && property_ie_url.is_none() {
+        return Err("Set RENT_IE_URL, DAFT_IE_REQUEST, and/or PROPERTY_IE_URL".into());
     }
 
     let places = match env::var(places::ENV_VAR) {
@@ -326,28 +437,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => Vec::new(),
     };
 
-    // Fetch both sources concurrently. Pagination remains sequential within each
-    // source so we don't burst the same host with parallel requests.
-    let rent_thread = rent_ie_url.map(|url| thread::spawn(move || fetch_rent_ie_listings(&url)));
-    let daft_thread =
-        daft_ie_request.map(|body| thread::spawn(move || fetch_daft_ie_listings(&body)));
-
-    let rent_result: Result<(Vec<Listing>, Option<String>), String> = match rent_thread {
-        Some(handle) => handle
-            .join()
-            .map_err(|_| "rent.ie fetch thread panicked".to_string())?
-            .map(|(listings, build_id)| (listings, Some(build_id))),
-        None => Ok((Vec::new(), None)),
-    };
-    let daft_result = match daft_thread {
-        Some(handle) => handle
-            .join()
-            .map_err(|_| "daft.ie fetch thread panicked".to_string())?,
-        None => Ok(Vec::new()),
-    };
-
-    let (mut listings, rent_build_id) = rent_result?;
-    listings.extend(daft_result?);
+    // Fetch configured sources concurrently. Pagination remains sequential
+    // within each source so we don't burst the same host with parallel requests.
+    let (listings, rent_build_id) =
+        fetch_all_sources(rent_ie_url, daft_ie_request, property_ie_url)?;
 
     let listing_count = listings.len();
     let groups = dedupe::group_listings(listings);

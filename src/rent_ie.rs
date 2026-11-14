@@ -17,6 +17,12 @@ struct NextPageData {
 }
 
 #[derive(Debug, DeJson)]
+struct BuildIdData {
+    #[nserde(rename = "buildId")]
+    build_id: String,
+}
+
+#[derive(Debug, DeJson)]
 struct NextQuery {
     #[nserde(rename = "propertyType")]
     property_type: String,
@@ -144,7 +150,7 @@ fn listing_from_data(listing: ListingData, section: &str) -> Listing {
 
     Listing {
         id: id.to_string(),
-        source: ListingSource::RentIe,
+        source: ListingSource::Rent,
         link: listing_url(section, &seo_friendly_path, id),
         img_url,
         image_keys,
@@ -179,7 +185,7 @@ fn listing_url(section: &str, seo_friendly_path: &str, listing_id: u64) -> Strin
     }
 }
 
-fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
+fn next_data_json(html: &str) -> Result<String, String> {
     let dom = tl::parse(html, ParserOptions::default())
         .map_err(|e| format!("Failed to parse HTML: {e}"))?;
 
@@ -190,7 +196,11 @@ fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
         .and_then(Node::as_tag)
         .ok_or("Failed to find __NEXT_DATA__ script in HTML")?;
 
-    let json = next_data_script.inner_text(dom.parser());
+    Ok(next_data_script.inner_text(dom.parser()).to_string())
+}
+
+fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
+    let json = next_data_json(html)?;
 
     NextPageData::deserialize_json(&json)
         .map_err(|e| format!("Failed to parse __NEXT_DATA__ JSON: {e}"))
@@ -230,7 +240,11 @@ pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
 }
 
 pub(crate) fn build_id_from_html(html: &str) -> Result<String, String> {
-    Ok(parse_next_page_data(html)?.build_id)
+    let json = next_data_json(html)?;
+
+    BuildIdData::deserialize_json(&json)
+        .map(|data| data.build_id)
+        .map_err(|error| format!("Failed to parse __NEXT_DATA__ build ID: {error}"))
 }
 
 pub(crate) fn property_details_url(build_id: &str, listing: &Listing) -> Result<String, String> {

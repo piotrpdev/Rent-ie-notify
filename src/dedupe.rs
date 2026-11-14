@@ -80,10 +80,10 @@ mod tests {
     #[test]
     fn groups_by_shared_id_or_image_key() {
         let groups = group_listings(vec![
-            listing("1", &["a"], ListingSource::RentIe),
-            listing("2", &["b"], ListingSource::RentIe),
-            listing("3", &["a"], ListingSource::DaftIe),
-            listing("2", &["c"], ListingSource::DaftIe),
+            listing("1", &["a"], ListingSource::Rent),
+            listing("2", &["b"], ListingSource::Rent),
+            listing("3", &["a"], ListingSource::Daft),
+            listing("2", &["c"], ListingSource::Daft),
         ]);
 
         assert_eq!(groups.len(), 2);
@@ -94,9 +94,9 @@ mod tests {
     #[test]
     fn keeps_unmatched_listings_separate() {
         let groups = group_listings(vec![
-            listing("1", &["a"], ListingSource::RentIe),
-            listing("2", &["b"], ListingSource::DaftIe),
-            listing("3", &[], ListingSource::RentIe),
+            listing("1", &["a"], ListingSource::Rent),
+            listing("2", &["b"], ListingSource::Daft),
+            listing("3", &[], ListingSource::Rent),
         ]);
 
         assert_eq!(groups.len(), 3);
@@ -105,8 +105,8 @@ mod tests {
     #[test]
     fn does_not_group_same_source_image_reuse() {
         let groups = group_listings(vec![
-            listing("1", &["a"], ListingSource::RentIe),
-            listing("2", &["a"], ListingSource::RentIe),
+            listing("1", &["a"], ListingSource::Rent),
+            listing("2", &["a"], ListingSource::Rent),
         ]);
 
         assert_eq!(groups.len(), 2);
@@ -115,9 +115,9 @@ mod tests {
     #[test]
     fn groups_transitively() {
         let groups = group_listings(vec![
-            listing("1", &["a"], ListingSource::RentIe),
-            listing("2", &["a", "b"], ListingSource::DaftIe),
-            listing("3", &["b"], ListingSource::RentIe),
+            listing("1", &["a"], ListingSource::Rent),
+            listing("2", &["a", "b"], ListingSource::Daft),
+            listing("3", &["b"], ListingSource::Rent),
         ]);
 
         assert_eq!(groups.len(), 1);

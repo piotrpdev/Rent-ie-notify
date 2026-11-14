@@ -161,7 +161,7 @@ mod tests {
     fn includes_configured_distances() {
         let listing = Listing {
             id: "1".to_string(),
-            source: ListingSource::RentIe,
+            source: ListingSource::Rent,
             link: "https://example.com/1".to_string(),
             img_url: String::new(),
             image_keys: Vec::new(),
@@ -198,7 +198,7 @@ mod tests {
     fn includes_drive_times_when_available() {
         let listing = Listing {
             id: "1".to_string(),
-            source: ListingSource::RentIe,
+            source: ListingSource::Rent,
             link: "https://example.com/1".to_string(),
             img_url: String::new(),
             image_keys: Vec::new(),

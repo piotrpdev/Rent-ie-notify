@@ -207,7 +207,7 @@ mod tests {
     ) -> Listing {
         Listing {
             id: id.to_string(),
-            source: ListingSource::RentIe,
+            source: ListingSource::Rent,
             link: format!("https://example.com/{id}"),
             img_url: String::new(),
             image_keys: Vec::new(),

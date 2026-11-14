@@ -113,7 +113,7 @@ fn listing_from_data(listing: ListingData) -> Listing {
     Listing {
         // rent.ie and daft.ie share the numeric listing ID space.
         id: id.to_string(),
-        source: ListingSource::DaftIe,
+        source: ListingSource::Daft,
         link: absolute_url(&seo_friendly_path),
         img_url,
         image_keys,

@@ -33,11 +33,12 @@ Options:
   --rent-url URL              rent.ie search URL
   --daft-request JSON         daft.ie gateway JSON request body
   --daft-request-file PATH    read the daft.ie request body from a file
+  --property-url URL          property.ie search URL
   --binary PATH               binary under test
   --with-routing              forward OPENROUTESERVICE_API_KEY to enable ORS calls
   -h, --help                  show this help
 
-Defaults come from RENT_IE_URL and DAFT_IE_REQUEST.
+Defaults come from RENT_IE_URL, DAFT_IE_REQUEST, and PROPERTY_IE_URL.
 At least one source must be configured. OpenRouteService is disabled unless
 --with-routing is passed, so test runs do not consume map API requests.
 ";
@@ -57,6 +58,7 @@ struct Config {
     binary: PathBuf,
     rent_url: Option<String>,
     daft_request: Option<String>,
+    property_url: Option<String>,
     with_routing: bool,
 }
 
@@ -79,6 +81,9 @@ fn parse_args() -> Result<Option<Config>, Box<dyn Error>> {
         .ok()
         .filter(|value| !value.trim().is_empty());
     let mut daft_request = env::var("DAFT_IE_REQUEST")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let mut property_url = env::var("PROPERTY_IE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty());
     let mut with_routing = false;
@@ -113,6 +118,12 @@ fn parse_args() -> Result<Option<Config>, Box<dyn Error>> {
                     .map_err(|error| format!("failed to read {path}: {error}"))?;
                 daft_request = Some(body.trim().to_string());
             }
+            "--property-url" => {
+                property_url = Some(
+                    args.next()
+                        .ok_or_else(|| "--property-url requires a URL".to_string())?,
+                );
+            }
             "--with-routing" => with_routing = true,
             other => return Err(format!("unknown argument: {other}").into()),
         }
@@ -130,6 +141,7 @@ fn parse_args() -> Result<Option<Config>, Box<dyn Error>> {
         binary,
         rent_url,
         daft_request,
+        property_url,
         with_routing,
     }))
 }
@@ -186,9 +198,9 @@ fn run() -> Result<bool, Box<dyn Error>> {
         return Ok(true);
     };
 
-    if config.rent_url.is_none() && config.daft_request.is_none() {
+    if config.rent_url.is_none() && config.daft_request.is_none() && config.property_url.is_none() {
         return Err(
-            "set RENT_IE_URL and/or DAFT_IE_REQUEST, or pass --rent-url/--daft-request-file".into(),
+            "set RENT_IE_URL, DAFT_IE_REQUEST, and/or PROPERTY_IE_URL, or pass --rent-url/--daft-request-file/--property-url".into(),
         );
     }
 
@@ -217,6 +229,7 @@ fn run() -> Result<bool, Box<dyn Error>> {
         )
         .env_remove("RENT_IE_URL")
         .env_remove("DAFT_IE_REQUEST")
+        .env_remove("PROPERTY_IE_URL")
         .env_remove("OPENROUTESERVICE_API_KEY");
 
     if let Some(rent_url) = &config.rent_url {
@@ -224,6 +237,9 @@ fn run() -> Result<bool, Box<dyn Error>> {
     }
     if let Some(daft_request) = &config.daft_request {
         command.env("DAFT_IE_REQUEST", daft_request);
+    }
+    if let Some(property_url) = &config.property_url {
+        command.env("PROPERTY_IE_URL", property_url);
     }
     if let Some(api_key) = &routing_api_key {
         command.env("OPENROUTESERVICE_API_KEY", api_key);

@@ -7,6 +7,7 @@ edition = "2024"
 base64 = "0.23.1"
 minreq = { version = "2.14.1", default-features = false, features = [ "https" ] }
 nanoserde = { version = "0.2.1", default-features = false, features = [ "std", "json" ] }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "http2", "rustls"] }
 tl = { version = "0.7.8", default-features = false }
 
 [lints.rust]

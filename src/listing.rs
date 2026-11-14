@@ -4,8 +4,9 @@ use nanoserde::DeJson;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ListingSource {
-    RentIe,
-    DaftIe,
+    Rent,
+    Daft,
+    Property,
 }
 
 #[derive(Debug, Clone, Copy)]

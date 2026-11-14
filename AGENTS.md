@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search results from their JSON APIs, groups cross-site duplicates, dedupes against `sent_ids.txt`, and posts new ones to a Slack webhook. Runs hourly via systemd; the GitHub Actions workflow is manual-only right now.
+Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property.ie search results from their JSON APIs, groups cross-site duplicates, dedupes against `sent_ids.txt`, and posts new ones to a Slack webhook. Runs hourly via systemd; the GitHub Actions workflow is manual-only right now.
 
 ## Layout
 
@@ -13,6 +13,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 - `src/dedupe.rs` — groups listings across sources by shared numeric ID or intersecting image keys.
 - `src/rent_ie.rs` — builds the rent.ie `_next/data` search API URL from `__NEXT_DATA__.page`/`query` and parses the API JSON; `tl` locates the metadata script, `nanoserde` parses JSON.
 - `src/daft_ie.rs` — parses daft.ie gateway API responses; links use `https://www.daft.ie<seoFriendlyPath>`.
+- `src/property_ie.rs` — builds property.ie `_next/data` search URLs from `__NEXT_DATA__` metadata and parses its search JSON; property.ie requires HTTP/2, so it uses reqwest.
 - `src/slack.rs` — Slack Block Kit payload built with `nanoserde`.
 - `scripts/check.sh` — runs fmt, clippy, unit tests, archive tests, and the release build.
 - `examples/slack_sink_e2e.rs` — runs the real binary against a local Slack sink in a temporary working directory; `cargo slack-sink-e2e` is the alias.
@@ -22,12 +23,12 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 
 ## Commands
 
-- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (28 unit tests, plus 3 ignored archive-backed tests).
+- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (30 unit tests, plus 3 ignored archive-backed tests).
 - Check everything: `scripts/check.sh` (also runs the archive tests and release build).
 - Archive check: `cargo test --locked -- --ignored` (parses the rent.ie and daft.ie fixtures in `archives/`).
-- Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.
+- Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`/`PROPERTY_IE_URL`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.
 - Build: `cargo build --release` → `target/release/Rent-ie-notify`.
-- Run from the repo root with `SLACK_WEBHOOK_URL` and at least one of `RENT_IE_URL` or `DAFT_IE_REQUEST` set. Optional `PLACES_OF_INTEREST` adds distance lines; optional `OPENROUTESERVICE_API_KEY` enables driving times/distances; optional `TEXT_REPORT_DIR` writes grouped timestamped text reports.
+- Run from the repo root with `SLACK_WEBHOOK_URL` and at least one of `RENT_IE_URL`, `DAFT_IE_REQUEST`, or `PROPERTY_IE_URL` set. Optional `PLACES_OF_INTEREST` adds distance lines; optional `OPENROUTESERVICE_API_KEY` enables driving times/distances; optional `TEXT_REPORT_DIR` writes grouped timestamped text reports.
 - CI pins Rust 1.92.0 (workflow); locally installed toolchains may be newer, so avoid APIs newer than that.
 
 ## Gotchas
@@ -41,9 +42,10 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 - Image keys are decoded from the base64 media URL descriptor's `key` field. Duplicates are grouped across sources by shared ID or intersecting image keys; image-key matches within the same source are ignored so reused/stock photos do not merge distinct ads. The first source configured provides the Slack representative.
 - rent.ie `seoFriendlyPath` is a `/share/<slug>/<id>` path that 404s. Links are constructed as `https://www.rent.ie/<pageProps.propertyType>/<slug>/<id>/`; the section varies (`rooms-to-rent`, `houses-to-let`, etc.).
 - daft.ie uses a POST to `https://gateway.daft.ie/api/v2/ads/listings`. `DAFT_IE_REQUEST` is the JSON request body; it needs `accept`/`content-type`, `brand: daft`, `platform: web`, `origin`, and `referer` (set in `main.rs`). Browser-only `sec-*`/`user-agent` headers aren't required; omitting brand/platform returns 400 and omitting origin/referer gets a 403. The gateway caps `pageSize` at 50 and pagination follows `paging.nextFrom`, rewriting only the request body's `paging.from` value.
-- Both search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`.
-- For each new group representative, `rent_ie::property_details_url`/`extract_details_from_json` fetch `propertyOverview` from the rent.ie property endpoint (it works for daft.ie IDs too). Missing values omit the `Available from`/`Minimum lease` lines; individual detail failures are logged and do not fail the run.
-- rent.ie and daft.ie are fetched concurrently on separate threads. Pagination and property-detail requests stay sequential and call `delay::sleep()` (1 second plus up to 500 ms of jitter) between requests to avoid rate limiting/bot detection.
+- property.ie requires HTTP/2; its HTML/API requests return 403 over HTTP/1.1. `fetch_property_ie_listings` uses reqwest for this source. Property details/coordinates are fetched through the rent.ie property endpoint, which also accepts property.ie IDs.
+- All search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`.
+- For each new group representative, `rent_ie::property_details_url`/`extract_details_from_json` fetch `propertyOverview` from the rent.ie property endpoint (it works for daft.ie and property.ie IDs too). Missing values omit the `Available from`/`Minimum lease` lines; individual detail failures are logged and do not fail the run.
+- All configured sources are fetched concurrently on separate threads. Pagination and property-detail requests stay sequential and call `delay::sleep()` (1 second plus up to 500 ms of jitter) between requests to avoid rate limiting/bot detection.
 - Search API `publishDate` is epoch milliseconds and is converted to a UTC human-readable date such as `14th of November, 2026`.
 - `PLACES_OF_INTEREST` is an optional JSON array:
   `[{"name":"Work","latitude":52.244898,"longitude":-7.159315}]`.

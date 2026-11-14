@@ -1,11 +1,12 @@
 # Rent.ie Notify
 
-Scans rent.ie and/or daft.ie for new listings and uses a Slack webhook to notify you. Listings found on both sites are grouped by shared numeric ID or media key and sent once.
+Scans rent.ie, daft.ie, and/or property.ie for new listings and uses a Slack webhook to notify you. Listings found on multiple sites are grouped by shared numeric ID or media key and sent once.
 
 Set `SLACK_WEBHOOK_URL` and at least one source:
 
 - `RENT_IE_URL` — a rent.ie search-results URL.
 - `DAFT_IE_REQUEST` — the JSON request body for `https://gateway.daft.ie/api/v2/ads/listings`.
+- `PROPERTY_IE_URL` — a property.ie search-results URL.
 
 Optional:
 
@@ -28,7 +29,7 @@ cargo build --locked
 cargo slack-sink-e2e --daft-request-file path/to/daft-request.json
 ```
 
-`RENT_IE_URL` and `DAFT_IE_REQUEST` are picked up from the environment unless overridden with `--rent-url` / `--daft-request`. OpenRouteService is disabled during this check by default; pass `--with-routing` to forward `OPENROUTESERVICE_API_KEY` and exercise routing.
+`RENT_IE_URL`, `DAFT_IE_REQUEST`, and `PROPERTY_IE_URL` are picked up from the environment unless overridden with `--rent-url` / `--daft-request` / `--property-url`. OpenRouteService is disabled during this check by default; pass `--with-routing` to forward `OPENROUTESERVICE_API_KEY` and exercise routing.
 
 ## License
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Checks for new Rent.ie and Daft.ie listings and posts them to a Slack webhook.
+Description=Checks for new Rent.ie, Daft.ie, and Property.ie listings and posts them to a Slack webhook.
 After=network-online.target
 Wants=network-online.target
 
@@ -17,6 +17,8 @@ RestartSec=5s
 Environment=RENT_IE_URL='https://www.rent.ie/rooms-to-rent/xxxx/xxxx/room-type_either/sort-by_date-entered_down/'
 # Optional daft.ie source: JSON request body for gateway.daft.ie.
 Environment=DAFT_IE_REQUEST='{"section":"xxxx","filters":[{"name":"adState","values":["published"]}],"andFilters":[],"ranges":[{"from":"xxxx","to":"xxxx","name":"numBeds"},{"from":"xxxx","to":"xxxx","name":"rentalPrice"}],"paging":{"from":"0","pageSize":"200"},"geoFilter":{"storedShapeIds":["xxxx"],"geoSearchType":"STORED_SHAPES"},"terms":""}'
+# Optional property.ie source.
+# Environment=PROPERTY_IE_URL='https://www.property.ie/property-to-let/xxxx/price_0-xxxx/beds_xxxx/'
 # Optional: JSON array of named places for distance lines.
 # Environment=PLACES_OF_INTEREST='[{"name":"Work","latitude":xxxx,"longitude":xxxx}]'
 # Optional: OpenRouteService API key for driving times/distances.
