@@ -285,6 +285,27 @@ mod tests {
     }
 
     #[test]
+    fn builds_api_urls_with_max_rent_filters() -> Result<(), String> {
+        let houses_html = page_html(
+            r#"{"propertyType":"houses-to-let","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre","rent_0-650"]}"#,
+        );
+        assert_eq!(
+            search_api_url(&houses_html)?,
+            "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre/rent_0-650.json?propertyType=houses-to-let&county=waterford&areaFamily=renting&rest=waterford-city-centre&rest=rent_0-650"
+        );
+
+        let rooms_html = page_html(
+            r#"{"propertyType":"rooms-to-rent","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre","rent_0-950"]}"#,
+        );
+        assert_eq!(
+            search_api_url(&rooms_html)?,
+            "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre/rent_0-950.json?propertyType=rooms-to-rent&county=waterford&areaFamily=renting&rest=waterford-city-centre&rest=rent_0-950"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn extracts_listing_from_api_json() -> Result<(), String> {
         let listings = extract_listings_from_json(SEARCH_JSON)?;
         assert_eq!(listings.len(), 1);
@@ -339,30 +360,47 @@ mod tests {
         let cases = [
             (
                 "archives/search_waterford_city_centre.json",
+                20,
                 "6721798",
                 "https://www.rent.ie/rooms-to-rent/",
                 "Double Room · House",
             ),
             (
                 "archives/search_waterford_city_centre_houses_to_let.json",
+                20,
                 "6720949",
                 "https://www.rent.ie/houses-to-let/",
                 "3 Bed · 1 Bath · House",
             ),
             (
                 "archives/search_waterford_city_centre_rooms_to_rent.json",
+                20,
+                "6721798",
+                "https://www.rent.ie/rooms-to-rent/",
+                "Double Room · House",
+            ),
+            (
+                "archives/search_waterford_city_centre_houses_to_let_max_650.json",
+                2,
+                "6602948",
+                "https://www.rent.ie/houses-to-let/",
+                "4 Bed · 2 Bath · House",
+            ),
+            (
+                "archives/search_waterford_city_centre_rooms_to_rent_max_950.json",
+                20,
                 "6721798",
                 "https://www.rent.ie/rooms-to-rent/",
                 "Double Room · House",
             ),
         ];
 
-        for (path, expected_id, expected_prefix, expected_description) in cases {
+        for (path, expected_count, expected_id, expected_prefix, expected_description) in cases {
             let json =
                 std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
             let listings = extract_listings_from_json(&json)?;
 
-            assert_eq!(listings.len(), 20, "{path}");
+            assert_eq!(listings.len(), expected_count, "{path}");
             let Some(first) = listings.first() else {
                 return Err(format!("expected listings in {path}"));
             };
