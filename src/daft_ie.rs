@@ -1,6 +1,8 @@
 use nanoserde::DeJson;
 
-use crate::listing::{Listing, format_description, format_publish_date};
+use crate::listing::{
+    Listing, ListingSource, extract_image_keys, format_description, format_publish_date,
+};
 
 pub(crate) const API_URL: &str = "https://gateway.daft.ie/api/v2/ads/listings";
 
@@ -72,16 +74,21 @@ fn listing_from_data(listing: ListingData) -> Listing {
         publish_date,
     } = listing;
 
-    let img_url = media
-        .and_then(|media| media.images.into_iter().next())
-        .and_then(|image| image.large.or(image.small))
-        .unwrap_or_default();
+    let image_urls: Vec<String> = media
+        .into_iter()
+        .flat_map(|media| media.images)
+        .filter_map(|image| image.large.or(image.small))
+        .collect();
+    let img_url = image_urls.first().cloned().unwrap_or_default();
+    let image_keys = extract_image_keys(&image_urls);
 
     Listing {
-        // Prefix the numeric ID so rent.ie and daft.ie IDs can coexist in sent_ids.txt.
-        id: format!("daft-{id}"),
+        // rent.ie and daft.ie share the numeric listing ID space.
+        id: id.to_string(),
+        source: ListingSource::DaftIe,
         link: absolute_url(&seo_friendly_path),
         img_url,
+        image_keys,
         address: title.trim().to_string(),
         price: price.trim().to_string(),
         date: publish_date.map(format_publish_date).unwrap_or_default(),
@@ -188,7 +195,7 @@ mod tests {
             return Err("expected one listing".to_string());
         };
 
-        assert_eq!(listing.id, "daft-6710820");
+        assert_eq!(listing.id, "6710820");
         assert_eq!(
             listing.link,
             "https://www.daft.ie/for-rent/rockshire-road-ferrybank-co-waterford/6710820"
@@ -236,7 +243,7 @@ mod tests {
         let Some(first) = listings.first() else {
             return Err("expected at least one listing".to_string());
         };
-        assert_eq!(first.id, "daft-6710820");
+        assert_eq!(first.id, "6710820");
         assert_eq!(
             first.link,
             "https://www.daft.ie/for-rent/rockshire-road-ferrybank-co-waterford/6710820"

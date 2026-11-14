@@ -3,6 +3,7 @@ use std::{env, fs::OpenOptions, io::Write, thread, time::Duration};
 use crate::listing::Listing;
 
 pub mod daft_ie;
+pub mod dedupe;
 pub mod listing;
 pub mod rent_ie;
 pub mod slack;
@@ -16,11 +17,12 @@ const SLACK_LISTINGS_PER_MESSAGE: usize = 20;
 const PAGE_REQUEST_DELAY: Duration = Duration::from_secs(1);
 
 fn parse_sent_ids(content: &str) -> Vec<String> {
-    // Older versions stored "<slug>/<id>"; rent.ie and daft.ie now expose numeric IDs.
-    // Reduce both formats to the final path segment so existing entries keep matching.
+    // Older versions stored "<slug>/<id>" and later versions stored daft IDs as
+    // "daft-<id>". Reduce both formats to the shared numeric ID.
     content
         .lines()
         .map(|line| line.trim().rsplit('/').next().unwrap_or_default())
+        .map(|id| id.strip_prefix("daft-").unwrap_or(id))
         .filter(|id| !id.is_empty())
         .map(ToString::to_string)
         .collect()
@@ -148,13 +150,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Set RENT_IE_URL and/or DAFT_IE_REQUEST".into());
     }
 
-    let mut sources: Vec<(&str, Vec<Listing>)> = Vec::new();
+    let mut listings = Vec::new();
     if let Some(rent_ie_url) = rent_ie_url {
-        sources.push(("rent.ie", fetch_rent_ie_listings(&rent_ie_url)?));
+        listings.extend(fetch_rent_ie_listings(&rent_ie_url)?);
     }
     if let Some(daft_ie_request) = daft_ie_request {
-        sources.push(("daft.ie", fetch_daft_ie_listings(&daft_ie_request)?));
+        listings.extend(fetch_daft_ie_listings(&daft_ie_request)?);
     }
+
+    let listing_count = listings.len();
+    let groups = dedupe::group_listings(listings);
+    println!(
+        "Grouped {listing_count} listings into {} unique listings.",
+        groups.len()
+    );
 
     println!("Loading already sent listing IDs from file...");
     let sent_ids = std::fs::read_to_string(SENT_IDS_FILENAME).map_or_else(
@@ -165,36 +174,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         |content| parse_sent_ids(&content),
     );
 
-    let mut new_ids = Vec::new();
+    let new_groups: Vec<Vec<Listing>> = groups
+        .into_iter()
+        .filter(|group| !group.iter().any(|listing| sent_ids.contains(&listing.id)))
+        .collect();
+    let new_listings: Vec<&Listing> = new_groups
+        .iter()
+        .filter_map(|group| group.first())
+        .collect();
 
-    for (source, listings) in &sources {
-        let filtered_listings: Vec<&Listing> = listings
-            .iter()
-            .filter(|listing| !sent_ids.contains(&listing.id))
-            .collect();
-
-        if filtered_listings.is_empty() {
-            println!("No new {source} listings.");
-            continue;
-        }
-
-        for chunk in filtered_listings.chunks(SLACK_LISTINGS_PER_MESSAGE) {
-            println!("Sending {} new {source} listings to Slack...", chunk.len());
-            let slack_message_json = slack::listings_to_slack_message_json(chunk);
-
-            minreq::post(&slack_webhook_url)
-                .with_header("Content-Type", "application/json")
-                .with_body(slack_message_json)
-                .send()
-                .map_err(|e| format!("Failed to send {source} message to Slack: {e}"))?;
-        }
-
-        new_ids.extend(filtered_listings.iter().map(|listing| listing.id.clone()));
-    }
-
-    if new_ids.is_empty() {
+    if new_listings.is_empty() {
+        println!("No new listings.");
         println!("Done.");
         return Ok(());
+    }
+
+    for chunk in new_listings.chunks(SLACK_LISTINGS_PER_MESSAGE) {
+        println!("Sending {} new listings to Slack...", chunk.len());
+        let slack_message_json = slack::listings_to_slack_message_json(chunk);
+
+        minreq::post(&slack_webhook_url)
+            .with_header("Content-Type", "application/json")
+            .with_body(slack_message_json)
+            .send()
+            .map_err(|e| format!("Failed to send message to Slack: {e}"))?;
+    }
+
+    let mut new_ids = Vec::new();
+    for group in &new_groups {
+        for listing in group {
+            if !new_ids.contains(&listing.id) {
+                new_ids.push(listing.id.clone());
+            }
+        }
     }
 
     println!("Saving sent listing IDs to {SENT_IDS_FILENAME}...");
@@ -223,6 +235,6 @@ mod tests {
         assert_eq!(ids.len(), 3);
         assert_eq!(ids.first().map(String::as_str), Some("6010625"));
         assert_eq!(ids.get(1).map(String::as_str), Some("6721798"));
-        assert_eq!(ids.get(2).map(String::as_str), Some("daft-6710820"));
+        assert_eq!(ids.get(2).map(String::as_str), Some("6710820"));
     }
 }

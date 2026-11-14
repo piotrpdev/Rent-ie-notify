@@ -1,11 +1,12 @@
 # AGENTS.md
 
-Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search results from their JSON APIs, dedupes against `sent_ids.txt`, and posts new ones to a Slack webhook. Runs hourly via systemd; the GitHub Actions workflow is manual-only right now.
+Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search results from their JSON APIs, groups cross-site duplicates, dedupes against `sent_ids.txt`, and posts new ones to a Slack webhook. Runs hourly via systemd; the GitHub Actions workflow is manual-only right now.
 
 ## Layout
 
-- `src/main.rs` — orchestration: env vars, per-source fetching, dedupe, Slack POST, state file.
-- `src/listing.rs` — shared `Listing` model plus description/date formatting.
+- `src/main.rs` — orchestration: env vars, source fetching, grouping, dedupe, Slack POST, state file.
+- `src/listing.rs` — shared `Listing` model plus image-key extraction and description/date formatting.
+- `src/dedupe.rs` — groups listings across sources by shared numeric ID or intersecting image keys.
 - `src/rent_ie.rs` — builds the rent.ie `_next/data` search API URL from `__NEXT_DATA__.page`/`query` and parses the API JSON; `tl` locates the metadata script, `nanoserde` parses JSON.
 - `src/daft_ie.rs` — parses daft.ie gateway API responses; links use `https://www.daft.ie<seoFriendlyPath>`.
 - `src/slack.rs` — Slack Block Kit payload built with `nanoserde`.
@@ -17,7 +18,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 
 ## Commands
 
-- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (12 unit tests, plus 2 ignored archive-backed tests).
+- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (17 unit tests, plus 3 ignored archive-backed tests).
 - Check everything: `scripts/check.sh` (also runs the archive tests and release build).
 - Archive check: `cargo test --locked -- --ignored` (parses the rent.ie and daft.ie fixtures in `archives/`).
 - Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too.
@@ -29,12 +30,13 @@ Single-binary Rust app (edition 2024): fetches rent.ie and/or daft.ie search res
 
 - `sent_ids.txt` is gitignored runtime state, read/written relative to the current directory. Running elsewhere moves the state. A missing file treats every fetched listing as new; deleting it re-sends everything.
 - There is no dry-run or argument parsing: any `cargo run` with valid env vars hits the configured APIs, Slack, and appends IDs. Use a throwaway webhook for end-to-end checks.
-- Slack's HTTP status is not checked; a transport-level success is enough to mark listings as sent, so a rejected payload can be lost silently. One message is sent per source, in chunks of 20 listings to stay under Slack's Block Kit limit; empty sources are skipped.
+- Slack's HTTP status is not checked; a transport-level success is enough to mark listings as sent, so a rejected payload can be lost silently. New groups are sent in chunks of 20 listings to stay under Slack's Block Kit limit; empty runs are skipped.
 - rent.ie listing data comes from `/_next/data/<buildId>/search/<rest>.json?...`. The `buildId` changes on deployments and isn't available from a stable endpoint, so the configured search page is still fetched once per run to read it from `<script id="__NEXT_DATA__">`.
 - `rent_ie::search_api_url` derives the API route and query parameters from `__NEXT_DATA__.page`/`query`; don't hand-build it from the public URL, which omits the county/area split. Filters such as max rent (`rent_0-650`) are additional `rest` path segments, not special-cased. The API ignores `pageSize`; pagination follows `pageProps.paging.currentPage/totalPages` with `&page=N`.
-- rent.ie IDs come from the numeric `id` field in the API response. Legacy `sent_ids.txt` entries in the old `<slug>/<id>` format are normalized to the final path segment when loaded, so they keep matching.
+- rent.ie and daft.ie share the numeric listing ID space; both are stored as numeric IDs in `sent_ids.txt`. Legacy `<slug>/<id>` and `daft-<id>` entries are normalized when loaded. A group is skipped if any of its IDs has already been sent, and all IDs in a new group are saved.
+- Image keys are decoded from the base64 media URL descriptor's `key` field. Duplicates are grouped across sources by shared ID or intersecting image keys; image-key matches within the same source are ignored so reused/stock photos do not merge distinct ads. The first source configured provides the Slack representative.
 - rent.ie `seoFriendlyPath` is a `/share/<slug>/<id>` path that 404s. Links are constructed as `https://www.rent.ie/<pageProps.propertyType>/<slug>/<id>/`; the section varies (`rooms-to-rent`, `houses-to-let`, etc.).
-- daft.ie uses a POST to `https://gateway.daft.ie/api/v2/ads/listings`. `DAFT_IE_REQUEST` is the JSON request body; it needs `accept`/`content-type`, `brand: daft`, `platform: web`, `origin`, and `referer` (set in `main.rs`). Browser-only `sec-*`/`user-agent` headers aren't required; omitting brand/platform returns 400 and omitting origin/referer gets a 403. daft IDs are prefixed `daft-` in `sent_ids.txt` so they can coexist with rent.ie IDs. The gateway caps `pageSize` at 50 and pagination follows `paging.nextFrom`, rewriting only the request body's `paging.from` value.
+- daft.ie uses a POST to `https://gateway.daft.ie/api/v2/ads/listings`. `DAFT_IE_REQUEST` is the JSON request body; it needs `accept`/`content-type`, `brand: daft`, `platform: web`, `origin`, and `referer` (set in `main.rs`). Browser-only `sec-*`/`user-agent` headers aren't required; omitting brand/platform returns 400 and omitting origin/referer gets a 403. The gateway caps `pageSize` at 50 and pagination follows `paging.nextFrom`, rewriting only the request body's `paging.from` value.
 - Both search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`. The rent.ie `property.json` / daft property endpoints have descriptions but cost one extra request per new listing.
 - Paginated API calls sleep for `PAGE_REQUEST_DELAY` (1 second) between pages to avoid rate limiting.
 - Search API `publishDate` is epoch milliseconds and is converted to a UTC `YYYY-MM-DD` date.

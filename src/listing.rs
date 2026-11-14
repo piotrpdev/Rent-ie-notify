@@ -1,12 +1,56 @@
+use base64::{Engine as _, engine::general_purpose};
+
+use nanoserde::DeJson;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListingSource {
+    RentIe,
+    DaftIe,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Listing {
     pub(crate) id: String,
+    pub(crate) source: ListingSource,
     pub(crate) link: String,
     pub(crate) img_url: String,
+    pub(crate) image_keys: Vec<String>,
     pub(crate) address: String,
     pub(crate) price: String,
     pub(crate) date: String,
     pub(crate) description: String,
+}
+
+#[derive(Debug, DeJson)]
+struct ImageDescriptor {
+    key: Option<String>,
+}
+
+fn image_key(url: &str) -> Option<String> {
+    let without_query = url.split('?').next()?;
+    let (_, address) = without_query.split_once("://")?;
+    let (_, payload) = address.split_once('/')?;
+    let decoded = general_purpose::STANDARD
+        .decode(payload)
+        .or_else(|_| general_purpose::URL_SAFE.decode(payload))
+        .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(payload))
+        .ok()?;
+    let json = String::from_utf8(decoded).ok()?;
+    ImageDescriptor::deserialize_json(&json).ok()?.key
+}
+
+pub(crate) fn extract_image_keys(urls: &[String]) -> Vec<String> {
+    let mut keys = Vec::new();
+
+    for url in urls {
+        if let Some(key) = image_key(url)
+            && !keys.contains(&key)
+        {
+            keys.push(key);
+        }
+    }
+
+    keys
 }
 
 pub(crate) fn format_description(parts: [Option<String>; 3]) -> String {
@@ -53,11 +97,21 @@ const fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::format_publish_date;
+    use super::{extract_image_keys, format_publish_date};
 
     #[test]
     fn formats_publish_date_in_utc() {
         assert_eq!(format_publish_date(1_794_588_353_317), "2026-11-13");
         assert_eq!(format_publish_date(0), "1970-01-01");
+    }
+
+    #[test]
+    fn extracts_image_keys_from_media_urls() {
+        let url = "https://media.example/eyJrZXkiOiJhL2IvYy5qcGcifQ==?signature=x";
+        let keys = extract_image_keys(&[url.to_string(), url.to_string()]);
+        assert_eq!(keys, vec!["a/b/c.jpg"]);
+
+        let keys = extract_image_keys(&["https://media.example/example.jpg".to_string()]);
+        assert_eq!(keys, Vec::<String>::new());
     }
 }

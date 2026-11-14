@@ -1,6 +1,6 @@
 # Rent.ie Notify
 
-Scans rent.ie and/or daft.ie for new listings and uses a Slack webhook to notify you.
+Scans rent.ie and/or daft.ie for new listings and uses a Slack webhook to notify you. Listings found on both sites are grouped by shared numeric ID or media key and sent once.
 
 Set `SLACK_WEBHOOK_URL` and at least one source:
 

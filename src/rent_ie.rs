@@ -1,7 +1,9 @@
 use nanoserde::DeJson;
 use tl::{Node, ParserOptions};
 
-use crate::listing::{Listing, format_description, format_publish_date};
+use crate::listing::{
+    Listing, ListingSource, extract_image_keys, format_description, format_publish_date,
+};
 
 const NEXT_DATA_SELECTOR: &str = "script#__NEXT_DATA__";
 const RENT_IE_BASE_URL: &str = "https://www.rent.ie";
@@ -95,15 +97,20 @@ fn listing_from_data(listing: ListingData, section: &str) -> Listing {
         publish_date,
     } = listing;
 
-    let img_url = media
-        .and_then(|media| media.images.into_iter().next())
-        .and_then(|image| image.thumbnail)
-        .unwrap_or_default();
+    let image_urls: Vec<String> = media
+        .into_iter()
+        .flat_map(|media| media.images)
+        .filter_map(|image| image.thumbnail)
+        .collect();
+    let img_url = image_urls.first().cloned().unwrap_or_default();
+    let image_keys = extract_image_keys(&image_urls);
 
     Listing {
         id: id.to_string(),
+        source: ListingSource::RentIe,
         link: listing_url(section, &seo_friendly_path, id),
         img_url,
+        image_keys,
         address: title.trim().to_string(),
         price: price.trim().to_string(),
         date: publish_date.map(format_publish_date).unwrap_or_default(),
