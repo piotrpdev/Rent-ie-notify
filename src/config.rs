@@ -27,6 +27,8 @@ pub(crate) struct Config {
     pub(crate) dry_run: bool,
     /// `SEED_SENT_IDS`: record current listings as sent without posting.
     pub(crate) seed_only: bool,
+    /// Settings that are valid but have no effect, printed at startup.
+    pub(crate) warnings: Vec<String>,
 }
 
 impl Config {
@@ -78,16 +80,27 @@ impl Config {
             .transpose()?
             .unwrap_or_default();
 
+        let text_report_dir = value("TEXT_REPORT_DIR");
+        let text_report_include_all = flag("TEXT_REPORT_INCLUDE_ALL");
+        let mut warnings = Vec::new();
+        if text_report_include_all && text_report_dir.is_none() {
+            warnings.push(
+                "TEXT_REPORT_INCLUDE_ALL is set but TEXT_REPORT_DIR is not, so no report is written"
+                    .to_string(),
+            );
+        }
+
         Ok(Self {
             sources,
             webhook_url,
             ors_api_key: value("OPENROUTESERVICE_API_KEY"),
-            text_report_dir: value("TEXT_REPORT_DIR"),
-            text_report_include_all: flag("TEXT_REPORT_INCLUDE_ALL"),
+            text_report_dir,
+            text_report_include_all,
             max_beds,
             places,
             dry_run,
             seed_only,
+            warnings,
         })
     }
 }
@@ -132,6 +145,7 @@ mod tests {
         assert!(config.text_report_include_all);
         assert_eq!(config.places.len(), 1);
         assert!(!config.dry_run && !config.seed_only);
+        assert_eq!(config.warnings.len(), 1);
         Ok(())
     }
 

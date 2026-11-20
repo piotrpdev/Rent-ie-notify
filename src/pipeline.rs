@@ -317,6 +317,24 @@ fn populate_listing_details(
     }
 }
 
+/// `SEED_SENT_IDS`: records every unsent group's IDs without posting (or,
+/// in a dry run, only reports how many it would record). Returns the summary
+/// outcome.
+fn seed(group_ids: &[Vec<String>], sent_ids_path: &Path, dry_run: bool) -> Result<String> {
+    let ids = unique_ids(group_ids.iter().flatten());
+    if dry_run {
+        println!("DRY_RUN: would seed {} listing IDs.", ids.len());
+        return Ok(format!("would seed {} IDs (dry run)", ids.len()));
+    }
+
+    println!(
+        "SEED_SENT_IDS is set: recording {} listing IDs without posting...",
+        ids.len()
+    );
+    state::append(sent_ids_path, &ids)?;
+    Ok(format!("{} IDs seeded", ids.len()))
+}
+
 /// Runs one check: fetch, group, filter already-sent listings, fetch details,
 /// write the report, post to Slack, and record what was sent. State files
 /// (`sent_ids.txt`, its lock) live in `state_dir`.
@@ -331,7 +349,11 @@ pub(crate) fn run(config: Config, endpoints: &Endpoints, state_dir: &Path) -> Re
         places,
         dry_run,
         seed_only,
+        warnings,
     } = config;
+    for warning in warnings {
+        eprintln!("Warning: {warning}.");
+    }
     if dry_run {
         println!("DRY_RUN is set: Slack payloads are printed and sent_ids.txt is not updated.");
     }
@@ -375,18 +397,7 @@ pub(crate) fn run(config: Config, endpoints: &Endpoints, state_dir: &Path) -> Re
     summary.new = new_listings.len();
 
     if seed_only {
-        let ids = unique_ids(new_group_ids.iter().flatten());
-        if dry_run {
-            println!("DRY_RUN: would seed {} listing IDs.", ids.len());
-            summary.outcome = format!("would seed {} IDs (dry run)", ids.len());
-        } else {
-            println!(
-                "SEED_SENT_IDS is set: recording {} listing IDs without posting...",
-                ids.len()
-            );
-            state::append(&sent_ids_path, &ids)?;
-            summary.outcome = format!("{} IDs seeded", ids.len());
-        }
+        summary.outcome = seed(&new_group_ids, &sent_ids_path, dry_run)?;
         return finish(&summary, &failures);
     }
 
@@ -643,6 +654,7 @@ mod tests {
             places: Vec::new(),
             dry_run: false,
             seed_only: false,
+            warnings: Vec::new(),
         }
     }
 
