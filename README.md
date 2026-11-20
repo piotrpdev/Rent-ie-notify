@@ -71,20 +71,32 @@ Do not edit files under `/usr/lib`; systemd gives `/etc` precedence.
 
 ### Configure the service
 
-Edit `/etc/systemd/system/check_rent_ie.service` and set:
+Configuration and secrets live in `/etc/rent-ie-notify.env` (loaded through
+`EnvironmentFile=`), not in the unit file, because unit files are
+world-readable. Create it from the example and restrict it to root:
 
-- `RENT_IE_URL` — your rent.ie search URL.
-- `SLACK_WEBHOOK_URL` — your Slack webhook.
-- `DAFT_IE_REQUEST` — your JSON request body, or comment it out if unused.
-- Optional: `PROPERTY_IE_URL`, `MAX_BEDS`, `PLACES_OF_INTEREST`,
-  `OPENROUTESERVICE_API_KEY`, `TEXT_REPORT_DIR`, `TEXT_REPORT_INCLUDE_ALL`.
+```sh
+sudo install -m 600 -o root -g root rent-ie-notify.env.example /etc/rent-ie-notify.env
+sudoedit /etc/rent-ie-notify.env
+```
 
-The checked-in service file contains `xxxx` placeholders. The active
-`DAFT_IE_REQUEST` line must be replaced or commented out before starting the
-service.
+Set `SLACK_WEBHOOK_URL` and at least one of `RENT_IE_URL`, `DAFT_IE_REQUEST`,
+or `PROPERTY_IE_URL`; optionally `MAX_BEDS`, `PLACES_OF_INTEREST`,
+`OPENROUTESERVICE_API_KEY`, `TEXT_REPORT_DIR`, `TEXT_REPORT_INCLUDE_ALL`. The
+example contains `xxxx` placeholders; replace or comment out every active line.
 
-Many of these values are secrets; keep the real webhook and API keys only in
-the `/etc` unit or an untracked environment file, never in the repository.
+If you previously kept `Environment=` lines in the unit, move them into this
+file and remove them from `/etc/systemd/system/check_rent_ie.service`.
+
+To avoid posting every existing listing on the first run, seed the state once
+after the reload below (this runs the service normally, but with
+`SEED_SENT_IDS=1`, which records the current listings without posting):
+
+```sh
+sudo systemctl set-environment SEED_SENT_IDS=1
+sudo systemctl start check_rent_ie.service
+sudo systemctl unset-environment SEED_SENT_IDS
+```
 
 ### Reload and test
 
@@ -114,7 +126,9 @@ systemctl list-timers --all | grep check_rent_ie
 ```
 
 The timer uses `OnCalendar=hourly` and `Persistent=true`, so it runs at the top
-of each hour and catches up after a missed run.
+of each hour and catches up after a missed run. The service is `Type=oneshot`
+and is not restarted on failure (for example a Cloudflare 403); the next hourly
+run retries. Failed runs show up as `failed` in `systemctl status`.
 
 ## License
 

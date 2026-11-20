@@ -1,5 +1,5 @@
 [Unit]
-Description=Checks for new Rent.ie listings hourly and posts them to a Slack webhook.
+Description=Checks for new Rent.ie, Daft.ie, and Property.ie listings hourly and posts them to a Slack webhook.
 
 [Timer]
 OnCalendar=hourly

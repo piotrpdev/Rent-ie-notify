@@ -3,33 +3,20 @@ Description=Checks for new Rent.ie, Daft.ie, and Property.ie listings and posts 
 After=network-online.target
 Wants=network-online.target
 
-StartLimitIntervalSec=500
-StartLimitBurst=5
-
 [Service]
-Type=simple
+# Started hourly by check_rent_ie.timer. A failed run is not restarted: the
+# next timer run retries, instead of hammering Cloudflare-protected sites.
+Type=oneshot
 User=piotrpdev
 Group=piotrpdev
-WorkingDirectory=/home/piotrpdev/Rent-ie-notify/ 
+WorkingDirectory=/home/piotrpdev/Rent-ie-notify/
 ExecStart=/home/piotrpdev/Rent-ie-notify/target/release/Rent-ie-notify
-Restart=on-failure
-RestartSec=5s
-Environment=RENT_IE_URL='https://www.rent.ie/rooms-to-rent/xxxx/xxxx/room-type_either/sort-by_date-entered_down/'
-# Optional daft.ie source: JSON request body for gateway.daft.ie.
-Environment=DAFT_IE_REQUEST='{"section":"xxxx","filters":[{"name":"adState","values":["published"]}],"andFilters":[],"ranges":[{"from":"xxxx","to":"xxxx","name":"numBeds"},{"from":"xxxx","to":"xxxx","name":"rentalPrice"}],"paging":{"from":"0","pageSize":"200"},"geoFilter":{"storedShapeIds":["xxxx"],"geoSearchType":"STORED_SHAPES"},"terms":""}'
-# Optional property.ie source.
-# Environment=PROPERTY_IE_URL='https://www.property.ie/property-to-let/xxxx/price_0-xxxx/beds_xxxx/'
-# Optional global client-side bedroom cap.
-# Environment=MAX_BEDS='5'
-# Optional: JSON array of named places for distance lines.
-# Environment=PLACES_OF_INTEREST='[{"name":"Work","latitude":xxxx,"longitude":xxxx}]'
-# Optional: OpenRouteService API key for driving times/distances.
-# Environment=OPENROUTESERVICE_API_KEY='xxxx'
-# Optional: write timestamped grouped text reports to this directory.
-# Environment=TEXT_REPORT_DIR='reports'
-# Set to 1 to include every unique listing in each report instead of only new ones.
-# Environment=TEXT_REPORT_INCLUDE_ALL='1'
-Environment=SLACK_WEBHOOK_URL='https://hooks.slack.com/services/xxx/xxx/xxxxxx'
-
-[Install]
-WantedBy=multi-user.target
+# Safety net in case a request or pagination loop hangs.
+TimeoutStartSec=30min
+# Configuration and secrets (Slack webhook, rent.ie URL, ORS key) live in a
+# root-owned 0600 file instead of this world-readable unit; see
+# rent-ie-notify.env.example.
+EnvironmentFile=/etc/rent-ie-notify.env
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full

@@ -22,7 +22,8 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `scripts/check.sh` — runs fmt, clippy, unit tests, archive tests, and the release build.
 - `examples/slack_sink_e2e.rs` — runs the real binary against a local Slack sink in a temporary working directory; `cargo slack-sink-e2e` is the alias.
 - `archives/rentie/` / `archives/daftie/` / `archives/propertyie/` — saved API JSON responses used by the ignored archive tests; not read at runtime.
-- `check_rent_ie.service` / `check_rent_ie.timer` — hourly systemd deployment; hardcodes user, repo/binary paths, and env vars.
+- `check_rent_ie.service` / `check_rent_ie.timer` — hourly systemd deployment (`Type=oneshot`, no restart-on-failure, 30 min timeout); hardcodes user and repo/binary paths and loads config from `EnvironmentFile=/etc/rent-ie-notify.env`.
+- `rent-ie-notify.env.example` — placeholder template for that environment file.
 - `.github/workflows/hourly_listings.yaml` — builds/runs with `cargo run --locked --release`; persists `sent_ids.txt` as a workflow artifact; `schedule` is commented out.
 
 ## Commands
@@ -57,7 +58,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
   Slack shows straight-line distances from the listing's media/API location when no ORS data is available. Only daft.ie search results currently include coordinates; the dedupe representative borrows them from the daft.ie group member. Listings with no coordinates (including rent-only listings) omit the distance line.
 - `OPENROUTESERVICE_API_KEY` enables the `driving-car` matrix profile. Requests are batched (40 origins max), request both duration and distance, and any API failure/limit falls back to straight-line distances. ORS uses OSM profile speeds, not live traffic.
 - `TEXT_REPORT_DIR` enables timestamped text reports (`report-YYYY-MM-DD_HH-MM-SS.txt`) of **new listings** by default, grouped by single/double-bed counts from property details. `TEXT_REPORT_INCLUDE_ALL=1` changes it to all unique listings in the current run; that mode fetches details for every unique listing, not just new ones, so only enable it when the extra requests are acceptable. Empty reports are not written, and report write failures are logged without aborting the run.
-- `RENT_IE_URL`/`SLACK_WEBHOOK_URL`/`OPENROUTESERVICE_API_KEY` are secrets: `check_rent_ie.service` holds placeholders, and untracked `.vscode/launch.json` holds concrete values. Never copy them into tracked files, docs, or logs. reqwest errors embed the request URL, so format them with `http::describe_error` (strips the URL, keeps the cause chain). `PLACES_OF_INTEREST` and `DAFT_IE_REQUEST` are configuration, not secrets.
+- `RENT_IE_URL`/`SLACK_WEBHOOK_URL`/`OPENROUTESERVICE_API_KEY` are secrets: `rent-ie-notify.env.example` holds placeholders, the deployed `/etc/rent-ie-notify.env` (0600, root) and untracked `.vscode/launch.json` hold concrete values. Never copy them into tracked files, docs, or logs. reqwest errors embed the request URL, so format them with `http::describe_error` (strips the URL, keeps the cause chain). `PLACES_OF_INTEREST` and `DAFT_IE_REQUEST` are configuration, not secrets.
 - A 403 from rent.ie or daft.ie is likely Cloudflare; `http::send_text` adds a hint suggesting a residential IP to any 403 error.
 - nanoserde-derive panics on `pub(crate)` structs; derived structs must be private or `pub`.
 - `Cargo.toml` forbids `unsafe_code` and denies clippy `unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `todo`, and `unimplemented`; follow the existing `Result`/`Option` style.
