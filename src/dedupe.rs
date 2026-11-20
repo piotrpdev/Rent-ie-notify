@@ -100,24 +100,14 @@ pub(crate) fn group_listings(listings: Vec<Listing>) -> Vec<Vec<Listing>> {
 #[cfg(test)]
 mod tests {
     use super::{group_listings, representative};
-    use crate::listing::{Listing, ListingDetails, ListingSource};
+    use crate::listing::{Listing, ListingSource};
+    use crate::test_support;
     use crate::{daft_ie, rent_ie};
 
     fn listing(id: &str, image_keys: &[&str], source: ListingSource) -> Listing {
         Listing {
-            id: id.to_string(),
-            source,
-            link: String::new(),
-            img_url: String::new(),
             image_keys: image_keys.iter().map(ToString::to_string).collect(),
-            coordinates: None,
-            address: String::new(),
-            price: String::new(),
-            date: String::new(),
-            description: String::new(),
-            bedrooms: None,
-            details: ListingDetails::default(),
-            detail_property_type: "houses-to-let".to_string(),
+            ..test_support::listing(id, source)
         }
     }
 

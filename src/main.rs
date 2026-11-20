@@ -14,6 +14,8 @@ pub mod rent_ie;
 pub mod routing;
 pub mod slack;
 pub mod state;
+#[cfg(test)]
+mod test_support;
 pub mod text;
 
 const DAFT_IE_REQUEST_ENV: &str = "DAFT_IE_REQUEST";
@@ -112,6 +114,28 @@ fn unique_ids<'a>(ids: impl IntoIterator<Item = &'a String>) -> Vec<String> {
         .filter(|id| seen.insert(id.as_str()))
         .cloned()
         .collect()
+}
+
+/// Drops listings with more than `max_beds` bedrooms. Listings without a
+/// numeric count (room shares) are kept.
+fn retain_max_beds(listings: &mut Vec<Listing>, max_beds: u32) {
+    listings.retain(|listing| listing.bedrooms.is_none_or(|bedrooms| bedrooms <= max_beds));
+}
+
+/// Returns the representative of each group with no already-sent ID, alongside
+/// every ID in that group (all of which are recorded once it is sent).
+fn select_new(
+    groups: &[Vec<Listing>],
+    sent_ids: &HashSet<String>,
+) -> (Vec<Listing>, Vec<Vec<String>>) {
+    groups
+        .iter()
+        .filter(|group| !group.iter().any(|listing| sent_ids.contains(&listing.id)))
+        .filter_map(|group| {
+            let ids = group.iter().map(|listing| listing.id.clone()).collect();
+            Some((dedupe::representative(group)?, ids))
+        })
+        .unzip()
 }
 
 /// Where new listings go.
@@ -311,7 +335,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } = fetch_all_sources(rent_ie_url, daft_ie_request, property_ie_url)?;
 
     if let Some(max_beds) = max_beds {
-        listings.retain(|listing| listing.bedrooms.is_none_or(|bedrooms| bedrooms <= max_beds));
+        retain_max_beds(&mut listings, max_beds);
     }
 
     let listing_count = listings.len();
@@ -321,15 +345,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         groups.len()
     );
 
-    // Each new group's representative, alongside every ID in that group.
-    let (mut new_listings, new_group_ids): (Vec<Listing>, Vec<Vec<String>>) = groups
-        .iter()
-        .filter(|group| !group.iter().any(|listing| sent_ids.contains(&listing.id)))
-        .filter_map(|group| {
-            let ids = group.iter().map(|listing| listing.id.clone()).collect();
-            Some((dedupe::representative(group)?, ids))
-        })
-        .unzip();
+    let (mut new_listings, new_group_ids) = select_new(&groups, &sent_ids);
 
     if seed_only {
         let ids = unique_ids(new_group_ids.iter().flatten());
@@ -380,4 +396,117 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     finish(&failures)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::{Delivery, retain_max_beds, select_new, send_slack_listings};
+    use crate::listing::{Listing, ListingSource};
+    use crate::routing::RouteMap;
+    use crate::state;
+    use crate::test_support::{listing, run_sink};
+
+    fn ids(listings: &[Listing]) -> Vec<&str> {
+        listings.iter().map(|listing| listing.id.as_str()).collect()
+    }
+
+    #[test]
+    fn max_beds_keeps_room_shares() {
+        let mut listings = vec![
+            Listing {
+                bedrooms: Some(2),
+                ..listing("1", ListingSource::Rent)
+            },
+            Listing {
+                bedrooms: Some(5),
+                ..listing("2", ListingSource::Rent)
+            },
+            listing("3", ListingSource::Rent),
+        ];
+
+        retain_max_beds(&mut listings, 4);
+
+        assert_eq!(ids(&listings), vec!["1", "3"]);
+    }
+
+    #[test]
+    fn selects_unsent_groups_with_all_their_ids() {
+        let groups = vec![
+            vec![
+                listing("1", ListingSource::Rent),
+                listing("2", ListingSource::Daft),
+            ],
+            vec![
+                listing("3", ListingSource::Rent),
+                listing("4", ListingSource::Property),
+            ],
+            vec![listing("5", ListingSource::Property)],
+        ];
+        let sent_ids: HashSet<String> = HashSet::from(["4".to_string()]);
+
+        let (new_listings, group_ids) = select_new(&groups, &sent_ids);
+
+        assert_eq!(ids(&new_listings), vec!["2", "5"]);
+        assert_eq!(group_ids, vec![vec!["1", "2"], vec!["5"]]);
+    }
+
+    fn numbered(count: usize) -> (Vec<Listing>, Vec<Vec<String>>) {
+        (1..=count)
+            .map(|index| {
+                let id = index.to_string();
+                (listing(&id, ListingSource::Daft), vec![id.clone(), id])
+            })
+            .unzip()
+    }
+
+    #[test]
+    fn records_ids_only_for_messages_slack_accepts() -> Result<(), String> {
+        // 45 listings -> messages of 20, 20, 5. The second message is rejected
+        // (no images, so no retry); the others are accepted.
+        let (listings, group_ids) = numbered(45);
+        let (url, sink) = run_sink(vec![200, 400, 200])?;
+        let directory =
+            tempfile::tempdir().map_err(|error| format!("failed to create temp dir: {error}"))?;
+        let path = directory.path().join("sent_ids.txt");
+
+        let result = send_slack_listings(
+            &Delivery::Slack { webhook_url: url },
+            &listings,
+            &group_ids,
+            &[],
+            &RouteMap::new(),
+            &path,
+        );
+
+        assert!(result.is_err_and(|error| error.contains("20 listings")));
+        assert_eq!(sink.join().map_err(|_| "sink panicked")?.len(), 3);
+        let content = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+        let saved: Vec<&str> = content.lines().collect();
+        let expected: Vec<String> = (1..=20).chain(41..=45).map(|id| id.to_string()).collect();
+        assert_eq!(saved, expected);
+        assert_eq!(state::load(&path)?.len(), 25);
+        Ok(())
+    }
+
+    #[test]
+    fn dry_run_posts_nothing_and_writes_no_state() -> Result<(), String> {
+        let (listings, group_ids) = numbered(3);
+        let directory =
+            tempfile::tempdir().map_err(|error| format!("failed to create temp dir: {error}"))?;
+        let path = directory.path().join("sent_ids.txt");
+
+        send_slack_listings(
+            &Delivery::DryRun,
+            &listings,
+            &group_ids,
+            &[],
+            &RouteMap::new(),
+            &path,
+        )?;
+
+        assert!(!path.exists());
+        Ok(())
+    }
 }

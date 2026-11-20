@@ -193,6 +193,7 @@ mod tests {
 
     use super::{filename_from_seconds, generate, write_report};
     use crate::listing::{Listing, ListingDetails, ListingSource};
+    use crate::test_support;
 
     #[allow(clippy::too_many_arguments)]
     fn listing(
@@ -206,17 +207,7 @@ mod tests {
         minimum_lease: &str,
     ) -> Listing {
         Listing {
-            id: id.to_string(),
-            source: ListingSource::Rent,
-            link: format!("https://example.com/{id}"),
-            img_url: String::new(),
-            image_keys: Vec::new(),
-            coordinates: None,
-            address: String::new(),
             price: price.to_string(),
-            date: String::new(),
-            description: "House".to_string(),
-            bedrooms: None,
             details: ListingDetails {
                 available_from: available_from.to_string(),
                 minimum_lease: minimum_lease.to_string(),
@@ -225,7 +216,7 @@ mod tests {
                 twin_bedrooms,
                 bathrooms,
             },
-            detail_property_type: "houses-to-let".to_string(),
+            ..test_support::listing(id, ListingSource::Rent)
         }
     }
 

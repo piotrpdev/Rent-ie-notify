@@ -255,30 +255,23 @@ mod tests {
     use crate::listing::{Coordinates, Listing, ListingDetails, ListingSource};
     use crate::places::Place;
     use crate::routing::{RouteMap, RouteMeasurement};
+    use crate::test_support::{self, run_sink};
 
     #[test]
     fn includes_configured_distances() {
         let listing = Listing {
-            id: "1".to_string(),
             source: ListingSource::Rent,
             link: "https://example.com/1".to_string(),
-            img_url: String::new(),
-            image_keys: Vec::new(),
             coordinates: Some(Coordinates {
                 latitude: 52.244_898,
                 longitude: -7.159_315,
             }),
-            address: "Example address".to_string(),
-            price: "€500 per month".to_string(),
-            date: "14th of November, 2026".to_string(),
-            description: "House".to_string(),
-            bedrooms: None,
             details: ListingDetails {
                 available_from: "Now".to_string(),
                 minimum_lease: "1 Year".to_string(),
                 ..ListingDetails::default()
             },
-            detail_property_type: "houses-to-let".to_string(),
+            ..test_support::listing("1", ListingSource::Rent)
         };
         let places = vec![Place {
             name: "Work".to_string(),
@@ -296,26 +289,18 @@ mod tests {
     #[test]
     fn includes_drive_times_when_available() {
         let listing = Listing {
-            id: "1".to_string(),
             source: ListingSource::Rent,
             link: "https://example.com/1".to_string(),
-            img_url: String::new(),
-            image_keys: Vec::new(),
             coordinates: Some(Coordinates {
                 latitude: 52.244_898,
                 longitude: -7.159_315,
             }),
-            address: "Example address".to_string(),
-            price: "€500 per month".to_string(),
-            date: "14th of November, 2026".to_string(),
-            description: "House".to_string(),
-            bedrooms: None,
             details: ListingDetails {
                 available_from: "Now".to_string(),
                 minimum_lease: "1 Year".to_string(),
                 ..ListingDetails::default()
             },
-            detail_property_type: "houses-to-let".to_string(),
+            ..test_support::listing("1", ListingSource::Rent)
         };
         let places = vec![Place {
             name: "Work".to_string(),
@@ -336,49 +321,10 @@ mod tests {
         assert!(message.contains("*Drive:* Work 8 min (2.4 km)"));
     }
 
-    /// Serves one canned status per request and returns the received bodies.
-    fn run_sink(
-        statuses: Vec<u16>,
-    ) -> Result<(String, std::thread::JoinHandle<Vec<String>>), String> {
-        let server = tiny_http::Server::http("127.0.0.1:0").map_err(|error| error.to_string())?;
-        let port = server
-            .server_addr()
-            .to_ip()
-            .map(|address| address.port())
-            .ok_or("sink has no IP address")?;
-        let handle = std::thread::spawn(move || {
-            let mut bodies = Vec::new();
-            for status in statuses {
-                let Ok(mut request) = server.recv() else {
-                    break;
-                };
-                let mut body = String::new();
-                let _ = request.as_reader().read_to_string(&mut body);
-                bodies.push(body);
-                let _ = request.respond(
-                    tiny_http::Response::from_string("invalid_blocks").with_status_code(status),
-                );
-            }
-            bodies
-        });
-        Ok((format!("http://127.0.0.1:{port}/"), handle))
-    }
-
     fn listing_with_image() -> Listing {
         Listing {
-            id: "1".to_string(),
-            source: ListingSource::Daft,
-            link: "https://example.com/1".to_string(),
             img_url: "https://example.com/1.jpg".to_string(),
-            image_keys: Vec::new(),
-            coordinates: None,
-            address: "Example address".to_string(),
-            price: "€500 per month".to_string(),
-            date: String::new(),
-            description: "House".to_string(),
-            bedrooms: None,
-            details: ListingDetails::default(),
-            detail_property_type: "houses-to-let".to_string(),
+            ..test_support::listing("1", ListingSource::Daft)
         }
     }
 
