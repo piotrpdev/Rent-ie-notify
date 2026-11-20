@@ -1,13 +1,12 @@
 use nanoserde::DeJson;
 use reqwest::blocking::Client;
-use tl::{Node, ParserOptions};
 
 use crate::http::{self, Page};
 use crate::listing::{
     Listing, ListingSource, extract_image_keys, format_description, format_publish_date,
 };
+use crate::next_data::{self, Paging};
 
-const NEXT_DATA_SELECTOR: &str = "script#__NEXT_DATA__";
 const PROPERTY_IE_BASE_URL: &str = "https://www.property.ie";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36";
@@ -42,14 +41,6 @@ struct SearchPageProps {
     ad_type: String,
     #[nserde(default)]
     paging: Option<Paging>,
-}
-
-#[derive(Debug, DeJson)]
-struct Paging {
-    #[nserde(rename = "currentPage")]
-    current_page: u32,
-    #[nserde(rename = "totalPages")]
-    total_pages: u32,
 }
 
 #[derive(Debug, DeJson)]
@@ -135,28 +126,13 @@ fn listing_from_data(listing: ListingData, ad_type: &str) -> Listing {
 }
 
 fn listing_url(ad_type: &str, seo_friendly_path: &str, listing_id: u64) -> String {
-    let slug = seo_friendly_path
-        .trim_end_matches('/')
-        .rsplit('/')
-        .nth(1)
-        .unwrap_or_default()
-        .trim_matches('-');
+    let slug = next_data::slug_from_path(seo_friendly_path).trim_matches('-');
 
     format!("{PROPERTY_IE_BASE_URL}/{ad_type}/{slug}/{listing_id}/")
 }
 
 fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
-    let dom = tl::parse(html, ParserOptions::default())
-        .map_err(|error| format!("Failed to parse HTML: {error}"))?;
-
-    let next_data_script = dom
-        .query_selector(NEXT_DATA_SELECTOR)
-        .and_then(|mut selector| selector.next())
-        .and_then(|node_handle| node_handle.get(dom.parser()))
-        .and_then(Node::as_tag)
-        .ok_or("Failed to find __NEXT_DATA__ script in HTML")?;
-
-    let json = next_data_script.inner_text(dom.parser());
+    let json = next_data::json_from_html(html)?;
 
     NextPageData::deserialize_json(&json)
         .map_err(|error| format!("Failed to parse __NEXT_DATA__ JSON: {error}"))
@@ -164,17 +140,7 @@ fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
 
 pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
     let page_data = parse_next_page_data(html)?;
-    let rest = page_data.query.rest.join("/");
-    let route = page_data
-        .page
-        .replace("[[...rest]]", &rest)
-        .trim_matches('/')
-        .to_string();
-    let route = if route.is_empty() {
-        "search".to_string()
-    } else {
-        route
-    };
+    let route = next_data::data_route(&page_data.page, &page_data.query.rest);
 
     let mut url = format!(
         "{PROPERTY_IE_BASE_URL}/_next/data/{}/{route}.json?adType={}&county={}",
@@ -198,9 +164,7 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
         paging,
     } = data.page_props;
 
-    let next_page = paging.and_then(|paging| {
-        (paging.current_page < paging.total_pages).then_some(paging.current_page + 1)
-    });
+    let next_page = paging.as_ref().and_then(Paging::next_page);
 
     let listings = listings
         .into_iter()

@@ -5,6 +5,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 ## Layout
 
 - `src/main.rs` — orchestration: env vars, concurrent source fetching, grouping, dedupe, property details, Slack POST, state file.
+- `src/next_data.rs` — Next.js helpers shared by rent.ie and property.ie: `__NEXT_DATA__` extraction (via `tl`), `_next/data` route resolution, `Paging`, slug extraction.
 - `src/http.rs` — `send_text` (send + status check + body) and `paginate` (sequential page loop with `delay::sleep()`), shared by every source.
 - `src/delay.rs` — jittered delay helper for paginated/detail requests.
 - `src/listing.rs` — shared `Listing` model, coordinates, image-key extraction, and description/date formatting.
@@ -12,7 +13,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `src/routing.rs` — batched OpenRouteService `driving-car` Matrix requests for drive time/distance, with straight-line fallback.
 - `src/text.rs` — generates the optional text report grouped by bedroom configuration.
 - `src/dedupe.rs` — groups listings across sources by shared numeric ID or intersecting image keys.
-- `src/rent_ie.rs` — fetches rent.ie search pages and property details (`fetch_listings`, `fetch_build_id`, `add_listing_details`); builds the rent.ie `_next/data` search API URL from `__NEXT_DATA__.page`/`query` and parses the API JSON; `tl` locates the metadata script, `nanoserde` parses JSON.
+- `src/rent_ie.rs` — fetches rent.ie search pages and property details (`fetch_listings`, `fetch_build_id`, `add_listing_details`); builds the rent.ie `_next/data` search API URL from `__NEXT_DATA__.page`/`query` and parses the API JSON; `nanoserde` parses JSON.
 - `src/daft_ie.rs` — fetches (`fetch_listings`) and parses daft.ie gateway API responses; links use `https://www.daft.ie<seoFriendlyPath>`.
 - `src/property_ie.rs` — fetches (`fetch_listings`) and builds property.ie `_next/data` search URLs from `__NEXT_DATA__` metadata and parses its search JSON. All outbound HTTP uses reqwest blocking; property.ie requires HTTP/2.
 - `src/slack.rs` — Slack Block Kit payload built with `nanoserde`.
@@ -56,5 +57,6 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `TEXT_REPORT_DIR` enables timestamped text reports (`report-YYYY-MM-DD_HH-MM-SS.txt`) of **new listings** by default, grouped by single/double-bed counts from property details. `TEXT_REPORT_INCLUDE_ALL=1` changes it to all unique listings in the current run; that mode fetches details for every unique listing, not just new ones, so only enable it when the extra requests are acceptable.
 - `RENT_IE_URL`/`SLACK_WEBHOOK_URL`/`OPENROUTESERVICE_API_KEY` are secrets: `check_rent_ie.service` holds placeholders, and untracked `.vscode/launch.json` holds concrete values. Never copy them into tracked files, docs, or logs. `PLACES_OF_INTEREST` and `DAFT_IE_REQUEST` are configuration, not secrets.
 - A 403 from rent.ie or daft.ie is likely Cloudflare; `http::send_text` adds a hint suggesting a residential IP to any 403 error.
+- nanoserde-derive panics on `pub(crate)` structs; derived structs must be private or `pub`.
 - `Cargo.toml` forbids `unsafe_code` and denies clippy `unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `todo`, and `unimplemented`; follow the existing `Result`/`Option` style.
 - `Cargo.lock` is committed and CI uses `--locked`; change dependencies with Cargo rather than hand-editing the lockfile.

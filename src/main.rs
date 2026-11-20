@@ -7,6 +7,7 @@ pub mod dedupe;
 pub mod delay;
 pub mod http;
 pub mod listing;
+pub mod next_data;
 pub mod places;
 pub mod property_ie;
 pub mod rent_ie;

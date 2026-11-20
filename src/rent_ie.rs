@@ -1,14 +1,13 @@
 use nanoserde::DeJson;
 use reqwest::blocking::Client;
-use tl::{Node, ParserOptions};
 
 use crate::delay;
 use crate::http::{self, Page};
 use crate::listing::{
     Listing, ListingSource, extract_image_keys, format_description, format_publish_date,
 };
+use crate::next_data::{self, Paging};
 
-const NEXT_DATA_SELECTOR: &str = "script#__NEXT_DATA__";
 const RENT_IE_BASE_URL: &str = "https://www.rent.ie";
 
 #[derive(Debug, DeJson)]
@@ -48,14 +47,6 @@ struct SearchPageProps {
     #[nserde(rename = "propertyType")]
     property_type: String,
     paging: Option<Paging>,
-}
-
-#[derive(Debug, DeJson)]
-struct Paging {
-    #[nserde(rename = "currentPage")]
-    current_page: u32,
-    #[nserde(rename = "totalPages")]
-    total_pages: u32,
 }
 
 #[derive(Debug, DeJson)]
@@ -175,11 +166,7 @@ fn listing_from_data(listing: ListingData, section: &str) -> Listing {
 fn listing_url(section: &str, seo_friendly_path: &str, listing_id: u64) -> String {
     // `seoFriendlyPath` is a "/share/<slug>/<id>" path that doesn't resolve on its own;
     // the public listing page is served from "/<section>/<slug>/<id>/".
-    let slug = seo_friendly_path
-        .trim_end_matches('/')
-        .rsplit('/')
-        .nth(1)
-        .unwrap_or_default();
+    let slug = next_data::slug_from_path(seo_friendly_path);
 
     if slug.is_empty() {
         format!("{RENT_IE_BASE_URL}/{section}/{listing_id}/")
@@ -188,22 +175,8 @@ fn listing_url(section: &str, seo_friendly_path: &str, listing_id: u64) -> Strin
     }
 }
 
-fn next_data_json(html: &str) -> Result<String, String> {
-    let dom = tl::parse(html, ParserOptions::default())
-        .map_err(|e| format!("Failed to parse HTML: {e}"))?;
-
-    let next_data_script = dom
-        .query_selector(NEXT_DATA_SELECTOR)
-        .and_then(|mut selector| selector.next())
-        .and_then(|node_handle| node_handle.get(dom.parser()))
-        .and_then(Node::as_tag)
-        .ok_or("Failed to find __NEXT_DATA__ script in HTML")?;
-
-    Ok(next_data_script.inner_text(dom.parser()).to_string())
-}
-
 fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
-    let json = next_data_json(html)?;
+    let json = next_data::json_from_html(html)?;
 
     NextPageData::deserialize_json(&json)
         .map_err(|e| format!("Failed to parse __NEXT_DATA__ JSON: {e}"))
@@ -212,17 +185,7 @@ fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
 pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
     let page_data = parse_next_page_data(html)?;
 
-    let rest = page_data.query.rest.join("/");
-    let route = page_data
-        .page
-        .replace("[[...rest]]", &rest)
-        .trim_matches('/')
-        .to_string();
-    let route = if route.is_empty() {
-        "search".to_string()
-    } else {
-        route
-    };
+    let route = next_data::data_route(&page_data.page, &page_data.query.rest);
 
     let mut url = format!(
         "{RENT_IE_BASE_URL}/_next/data/{}/{route}.json?propertyType={}&county={}",
@@ -243,7 +206,7 @@ pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
 }
 
 pub(crate) fn build_id_from_html(html: &str) -> Result<String, String> {
-    let json = next_data_json(html)?;
+    let json = next_data::json_from_html(html)?;
 
     BuildIdData::deserialize_json(&json)
         .map(|data| data.build_id)
@@ -251,11 +214,8 @@ pub(crate) fn build_id_from_html(html: &str) -> Result<String, String> {
 }
 
 pub(crate) fn property_details_url(build_id: &str, listing: &Listing) -> Result<String, String> {
-    let address = listing
-        .link
-        .trim_end_matches('/')
-        .rsplit('/')
-        .nth(1)
+    let address = Some(next_data::slug_from_path(&listing.link))
+        .filter(|address| !address.is_empty())
         .ok_or_else(|| format!("Could not extract address from {}", listing.link))?;
     let property_type = if listing.detail_property_type.is_empty() {
         "houses-to-let"
@@ -309,9 +269,7 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
         paging,
     } = data.page_props;
 
-    let next_page = paging.and_then(|paging| {
-        (paging.current_page < paging.total_pages).then_some(paging.current_page + 1)
-    });
+    let next_page = paging.as_ref().and_then(Paging::next_page);
 
     let listings = listings
         .into_iter()
