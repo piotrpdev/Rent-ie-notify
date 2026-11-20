@@ -1,0 +1,32 @@
+name: 'Audit'
+
+on:
+  push:
+    branches: [rust-slack-rentie-daftie-propertyie]
+    paths: ['Cargo.toml', 'Cargo.lock', '.github/workflows/audit.yaml']
+  pull_request:
+    paths: ['Cargo.toml', 'Cargo.lock', '.github/workflows/audit.yaml']
+  # New advisories are published without any change here, so check weekly too.
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # Fails on any RustSec advisory affecting Cargo.lock.
+      - name: Audit dependencies
+        run: cargo audit --deny warnings

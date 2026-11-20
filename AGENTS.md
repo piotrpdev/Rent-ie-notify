@@ -27,6 +27,8 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `check_rent_ie.service` / `check_rent_ie.timer` — hourly systemd deployment (`Type=oneshot`, no restart-on-failure, 30 min timeout); hardcodes user and repo/binary paths and loads config from `EnvironmentFile=/etc/rent-ie-notify.env`.
 - `rent-ie-notify.env.example` — placeholder template for that environment file.
 - `.github/workflows/check.yaml` — runs `scripts/check.sh` on Rust 1.100.0 for pushes to the default branch and for every pull request.
+- `.github/workflows/audit.yaml` — `cargo audit --deny warnings` (RustSec) on dependency changes, pull requests, and weekly.
+- `.github/dependabot.yml` — weekly grouped update PRs for Cargo crates and GitHub Actions.
 - `.github/workflows/hourly_listings.yaml` — builds/runs with `cargo run --locked --release`; restores `sent_ids.txt` from the newest `sent_ids.txt` artifact of any run via the GitHub API (download-artifact only sees the current run) and re-uploads it even on failure; secrets come from repo secrets, other config from repo variables; `schedule` is commented out.
 
 ## Commands

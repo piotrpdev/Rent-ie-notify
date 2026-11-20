@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Weekly PRs for crate updates; CI (check.yaml, audit.yaml) validates them.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ['*']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
