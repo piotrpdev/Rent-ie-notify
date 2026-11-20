@@ -17,7 +17,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `src/rent_ie.rs` — fetches rent.ie search pages and property details (`fetch_listings`, `fetch_build_id`, `add_listing_details`); builds the rent.ie `_next/data` search API URL from `__NEXT_DATA__.page`/`query` and parses the API JSON; `nanoserde` parses JSON.
 - `src/daft_ie.rs` — fetches (`fetch_listings`) and parses daft.ie gateway API responses; links use `https://www.daft.ie<seoFriendlyPath>`.
 - `src/property_ie.rs` — fetches (`fetch_listings`) and builds property.ie `_next/data` search URLs from `__NEXT_DATA__` metadata and parses its search JSON. All outbound HTTP uses reqwest blocking; property.ie requires HTTP/2.
-- `src/slack.rs` — Slack Block Kit payload built with `nanoserde`.
+- `src/slack.rs` — Slack Block Kit payload built with `nanoserde` (scraped text is mrkdwn-escaped), plus `send`, which posts one message and retries without images if rejected.
 - `scripts/check.sh` — runs fmt, clippy, unit tests, archive tests, and the release build.
 - `examples/slack_sink_e2e.rs` — runs the real binary against a local Slack sink in a temporary working directory; `cargo slack-sink-e2e` is the alias.
 - `archives/rentie/` / `archives/daftie/` — saved API JSON responses for local verification; not read at runtime.

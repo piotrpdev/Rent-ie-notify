@@ -41,6 +41,21 @@ struct Accessory {
     alt_text: Option<String>,
 }
 
+/// Escapes the characters Slack mrkdwn treats as control sequences.
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Makes a URL safe inside `<url|label>`: `|` would end the URL early and
+/// `<`/`>` would end the link.
+fn escape_url(url: &str) -> String {
+    url.replace('|', "%7C")
+        .replace('<', "%3C")
+        .replace('>', "%3E")
+}
+
 fn distance_line(listing: &Listing, places: &[Place], routes: &RouteMap) -> String {
     let Some(coordinates) = listing.coordinates else {
         return String::new();
@@ -63,15 +78,15 @@ fn distance_line(listing: &Listing, places: &[Place], routes: &RouteMap) -> Stri
             || {
                 let distance = format_distance(distance_km(coordinates, place));
                 if has_drive {
-                    format!("{} {distance} straight-line", place.name)
+                    format!("{} {distance} straight-line", escape(&place.name))
                 } else {
-                    format!("{} {distance}", place.name)
+                    format!("{} {distance}", escape(&place.name))
                 }
             },
             |route| {
                 format!(
                     "{} {} ({})",
-                    place.name,
+                    escape(&place.name),
                     format_duration(route.duration_seconds),
                     format_distance(route.distance_meters / 1000.0)
                 )
@@ -98,18 +113,26 @@ impl WebhookPayload {
                 let mut inner_blocks = Vec::new();
                 let mut text = format!(
                     "*<{}|{}>*\n{}\n*Price:* {}\n*Posted:* {}",
-                    listing.link, listing.address, listing.description, listing.price, listing.date
+                    escape_url(&listing.link),
+                    escape(&listing.address),
+                    escape(&listing.description),
+                    escape(&listing.price),
+                    escape(&listing.date)
                 );
 
                 if !listing.details.available_from.is_empty() {
                     let _ = write!(
                         text,
                         "\n*Available from:* {}",
-                        listing.details.available_from
+                        escape(&listing.details.available_from)
                     );
                 }
                 if !listing.details.minimum_lease.is_empty() {
-                    let _ = write!(text, "\n*Minimum lease:* {}", listing.details.minimum_lease);
+                    let _ = write!(
+                        text,
+                        "\n*Minimum lease:* {}",
+                        escape(&listing.details.minimum_lease)
+                    );
                 }
                 text.push_str(&distance_line(listing, places, routes));
 
@@ -216,7 +239,19 @@ pub(crate) fn send(
 
 #[cfg(test)]
 mod tests {
-    use super::{listings_to_slack_message_json, send};
+    use super::{escape, escape_url, listings_to_slack_message_json, send};
+
+    #[test]
+    fn escapes_mrkdwn_control_characters() {
+        assert_eq!(
+            escape("Smith & Sons <Unit 1>"),
+            "Smith &amp; Sons &lt;Unit 1&gt;"
+        );
+        assert_eq!(
+            escape_url("https://example.com/a|b?x=<1>"),
+            "https://example.com/a%7Cb?x=%3C1%3E"
+        );
+    }
     use crate::listing::{Coordinates, Listing, ListingDetails, ListingSource};
     use crate::places::Place;
     use crate::routing::{RouteMap, RouteMeasurement};
