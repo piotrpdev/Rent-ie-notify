@@ -158,60 +158,115 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
     Ok((listings, next_from))
 }
 
-pub(crate) fn request_body_with_offset(request_body: &str, offset: u32) -> Result<String, String> {
-    let paging_start = request_body
-        .find("\"paging\"")
-        .ok_or("daft.ie request body has no paging field")?;
-    let paging = request_body
-        .get(paging_start..)
-        .ok_or("invalid daft.ie request body")?;
-    let from_start = paging
-        .find("\"from\"")
-        .map(|index| paging_start + index)
-        .ok_or("daft.ie request body paging has no from field")?;
+/// Returns the index of the closing quote of the JSON string starting at `start`.
+fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    loop {
+        match bytes.get(index)? {
+            b'\\' => index += 2,
+            b'"' => return Some(index),
+            _ => index += 1,
+        }
+    }
+}
 
-    let colon = request_body
-        .get(from_start..)
-        .and_then(|value| value.find(':'))
-        .map(|index| from_start + index + 1)
+/// Returns the end (exclusive) of the JSON value starting at `start`.
+fn value_end(json: &str, start: usize) -> Option<usize> {
+    let bytes = json.as_bytes();
+    match bytes.get(start)? {
+        b'"' => string_end(bytes, start).map(|end| end + 1),
+        b'{' | b'[' => {
+            let mut depth = 0usize;
+            let mut index = start;
+            loop {
+                match bytes.get(index)? {
+                    b'"' => index = string_end(bytes, index)?,
+                    b'{' | b'[' => depth += 1,
+                    b'}' | b']' => {
+                        depth = depth.checked_sub(1)?;
+                        if depth == 0 {
+                            return Some(index + 1);
+                        }
+                    }
+                    _ => {}
+                }
+                index += 1;
+            }
+        }
+        _ => Some(
+            json.get(start..)?
+                .find(|character: char| {
+                    matches!(character, ',' | '}' | ']') || character.is_whitespace()
+                })
+                .map_or(json.len(), |offset| start + offset),
+        ),
+    }
+}
+
+/// Returns the start of the value for `key` among the keys of the outermost
+/// object in `json`, ignoring nested objects and string contents.
+fn find_key(json: &str, key: &str) -> Option<usize> {
+    let bytes = json.as_bytes();
+    let mut depth = 0usize;
+    let mut index = 0;
+
+    while let Some(&byte) = bytes.get(index) {
+        match byte {
+            b'"' => {
+                let end = string_end(bytes, index)?;
+                let rest = json.get(end + 1..)?.trim_start();
+                if depth == 1 && json.get(index + 1..end) == Some(key) && rest.starts_with(':') {
+                    let value = rest.get(1..)?.trim_start();
+                    return Some(json.len() - value.len());
+                }
+                index = end;
+            }
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth = depth.checked_sub(1)?,
+            _ => {}
+        }
+        index += 1;
+    }
+
+    None
+}
+
+/// Sets `paging.from` in the top-level `paging` object of a daft.ie request
+/// body, inserting it if absent. Other `from` fields (e.g. in `ranges`) are
+/// never touched.
+pub(crate) fn request_body_with_offset(request_body: &str, offset: u32) -> Result<String, String> {
+    let paging_start = find_key(request_body, "paging")
+        .filter(|&start| request_body.as_bytes().get(start) == Some(&b'{'))
+        .ok_or("daft.ie request body has no top-level paging object")?;
+    let paging_end =
+        value_end(request_body, paging_start).ok_or("unterminated daft.ie paging object")?;
+    let paging = request_body
+        .get(paging_start..paging_end)
         .ok_or("invalid daft.ie paging object")?;
 
-    let value_start = request_body
-        .get(colon..)
-        .and_then(|value| value.find(|character: char| !character.is_whitespace()))
-        .map(|index| colon + index)
-        .ok_or("missing daft.ie paging offset")?;
-
-    let value = request_body
-        .get(value_start..)
-        .ok_or("invalid daft.ie paging offset")?;
-
-    let value_len = if value.starts_with('"') {
-        value
-            .get(1..)
-            .and_then(|value| value.find('"'))
-            .map(|index| index + 2)
-            .ok_or("unterminated daft.ie paging offset")?
+    let (value_start, value_end) = match find_key(paging, "from") {
+        Some(from) => {
+            let end = value_end(paging, from).ok_or("unterminated daft.ie paging offset")?;
+            (paging_start + from, paging_start + end)
+        }
+        None => (paging_start + 1, paging_start + 1),
+    };
+    let replacement = if value_start == value_end {
+        let has_fields = paging
+            .get(1..paging.len() - 1)
+            .is_some_and(|inner| !inner.trim().is_empty());
+        format!("\"from\":{offset}{}", if has_fields { "," } else { "" })
     } else {
-        value
-            .find([',', '}'])
-            .ok_or("unterminated daft.ie paging offset")?
+        offset.to_string()
     };
 
-    let mut updated = String::with_capacity(request_body.len());
-    updated.push_str(
-        request_body
-            .get(..value_start)
-            .ok_or("invalid daft.ie paging offset")?,
-    );
-    updated.push_str(&offset.to_string());
-    updated.push_str(
-        request_body
-            .get(value_start + value_len..)
-            .ok_or("invalid daft.ie paging offset")?,
-    );
-
-    Ok(updated)
+    let before = request_body
+        .get(..value_start)
+        .ok_or("invalid daft.ie paging offset")?;
+    let after = request_body
+        .get(value_end..)
+        .ok_or("invalid daft.ie paging offset")?;
+    Ok(format!("{before}{replacement}{after}"))
 }
 
 /// Fetches every results page for a daft.ie gateway request body.
@@ -279,6 +334,29 @@ mod tests {
             request_body_with_offset(body, 20)?,
             r#"{"section":"residential-to-rent","paging":{"from":20,"pageSize":"200"},"terms":""}"#
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn only_rewrites_the_top_level_paging_from() -> Result<(), String> {
+        let body = r#"{"terms":"\"paging\": {\"from\": 1}","paging":{"pageSize":"50"},"ranges":[{"from":"0","to":"1800","name":"rentalPrice"}]}"#;
+        assert_eq!(
+            request_body_with_offset(body, 50)?,
+            r#"{"terms":"\"paging\": {\"from\": 1}","paging":{"from":50,"pageSize":"50"},"ranges":[{"from":"0","to":"1800","name":"rentalPrice"}]}"#
+        );
+
+        let body = r#"{"ranges":[{"from":"0"}], "paging" : { "pageSize": 50, "from" : 0 } }"#;
+        assert_eq!(
+            request_body_with_offset(body, 100)?,
+            r#"{"ranges":[{"from":"0"}], "paging" : { "pageSize": 50, "from" : 100 } }"#
+        );
+
+        assert_eq!(
+            request_body_with_offset(r#"{"paging":{}}"#, 50)?,
+            r#"{"paging":{"from":50}}"#
+        );
+        assert!(request_body_with_offset(r#"{"ranges":[{"paging":{"from":0}}]}"#, 50).is_err());
 
         Ok(())
     }
