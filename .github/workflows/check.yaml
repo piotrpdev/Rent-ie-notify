@@ -1,0 +1,31 @@
+name: 'Check'
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # rust-toolchain.toml pins the same version; this installs it with the
+      # clippy and rustfmt components.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          components: clippy, rustfmt
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      # fmt, clippy, unit tests, archive tests, and release build.
+      - name: Run checks
+        run: scripts/check.sh
