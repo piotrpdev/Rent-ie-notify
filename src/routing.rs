@@ -1,10 +1,12 @@
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 
 use nanoserde::{DeJson, SerJson};
+use reqwest::blocking::Client;
 
 use crate::delay;
-use crate::listing::Listing;
+use crate::http;
+use crate::listing::{Coordinates, Listing};
 use crate::places::Place;
 
 const ORS_MATRIX_URL: &str = "https://api.openrouteservice.org/v2/matrix/driving-car";
@@ -33,76 +35,59 @@ struct MatrixResponse {
     distances: Vec<Vec<Option<f64>>>,
 }
 
-fn fetch_batch(listings: &[&Listing], places: &[Place], api_key: &str) -> Result<RouteMap> {
-    let mut locations = Vec::with_capacity(listings.len() + places.len());
+/// A listing ID and its coordinates, i.e. one matrix origin.
+type Origin<'a> = (&'a str, Coordinates);
 
-    for listing in listings {
-        let Some(coordinates) = listing.coordinates else {
-            continue;
-        };
-        locations.push([coordinates.longitude, coordinates.latitude]);
-    }
-    for place in places {
-        locations.push([place.longitude, place.latitude]);
-    }
-
+fn fetch_batch(
+    client: &Client,
+    origins: &[Origin<'_>],
+    places: &[Place],
+    api_key: &str,
+) -> Result<RouteMap> {
+    // ORS takes [longitude, latitude]: origins first, then destinations.
+    let locations = origins
+        .iter()
+        .map(|(_, coordinates)| [coordinates.longitude, coordinates.latitude])
+        .chain(places.iter().map(|place| [place.longitude, place.latitude]))
+        .collect();
     let request = MatrixRequest {
         locations,
-        sources: (0..listings.len()).collect(),
-        destinations: (listings.len()..listings.len() + places.len()).collect(),
+        sources: (0..origins.len()).collect(),
+        destinations: (origins.len()..origins.len() + places.len()).collect(),
         metrics: vec!["duration".to_string(), "distance".to_string()],
     };
-    let body = request.serialize_json();
 
-    let response = reqwest::blocking::Client::new()
-        .post(ORS_MATRIX_URL)
-        .header("Authorization", api_key)
-        .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .map_err(crate::http::without_url)
-        .context("OpenRouteService request failed")?;
-
-    let status = response.status().as_u16();
-    if status != 200 {
-        bail!("OpenRouteService returned status {status}");
-    }
-
-    let json = response
-        .text()
-        .map_err(crate::http::without_url)
-        .context("Failed to read OpenRouteService response")?;
-    let data: MatrixResponse = MatrixResponse::deserialize_json(&json)
+    let json = http::send_text(
+        client
+            .post(ORS_MATRIX_URL)
+            .header("Authorization", api_key)
+            .header("Content-Type", "application/json")
+            .body(request.serialize_json()),
+        "OpenRouteService matrix",
+    )?;
+    let data = MatrixResponse::deserialize_json(&json)
         .context("Failed to parse OpenRouteService response")?;
 
-    let mut routes = RouteMap::new();
-
-    for (row_index, listing) in listings.iter().enumerate() {
-        let durations = data.durations.get(row_index);
-        let distances = data.distances.get(row_index);
-        let mut measurements = Vec::with_capacity(places.len());
-
-        for place_index in 0..places.len() {
-            let duration = durations
-                .and_then(|row| row.get(place_index))
-                .copied()
-                .flatten();
-            let distance = distances
-                .and_then(|row| row.get(place_index))
-                .copied()
-                .flatten();
-
-            measurements.push(match (duration, distance) {
-                (Some(duration_seconds), Some(distance_meters)) => Some(RouteMeasurement {
-                    duration_seconds,
-                    distance_meters,
-                }),
-                _ => None,
-            });
-        }
-
-        routes.insert(listing.id.clone(), measurements);
-    }
+    let measurement = |row: Option<&Vec<Option<f64>>>, place_index: usize| {
+        row.and_then(|row| row.get(place_index)).copied().flatten()
+    };
+    let routes = origins
+        .iter()
+        .enumerate()
+        .map(|(row_index, (id, _))| {
+            let durations = data.durations.get(row_index);
+            let distances = data.distances.get(row_index);
+            let measurements = (0..places.len())
+                .map(|place_index| {
+                    Some(RouteMeasurement {
+                        duration_seconds: measurement(durations, place_index)?,
+                        distance_meters: measurement(distances, place_index)?,
+                    })
+                })
+                .collect();
+            ((*id).to_string(), measurements)
+        })
+        .collect();
 
     Ok(routes)
 }
@@ -125,14 +110,15 @@ pub(crate) fn fetch_routes(listings: &[Listing], places: &[Place], api_key: &str
         return routes;
     }
 
-    let origins: Vec<&Listing> = listings
+    let origins: Vec<Origin<'_>> = listings
         .iter()
-        .filter(|listing| listing.coordinates.is_some())
+        .filter_map(|listing| Some((listing.id.as_str(), listing.coordinates?)))
         .collect();
+    let client = Client::new();
     let batch_count = origins.len().div_ceil(max_origins);
 
     for (batch_index, batch) in origins.chunks(max_origins).enumerate() {
-        match fetch_batch(batch, places, api_key) {
+        match fetch_batch(&client, batch, places, api_key) {
             Ok(batch_routes) => routes.extend(batch_routes),
             Err(error) => eprintln!(
                 "Failed to fetch drive times from OpenRouteService: {error:#}; using straight-line fallback for this batch."
