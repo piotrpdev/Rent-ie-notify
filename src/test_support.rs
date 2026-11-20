@@ -17,6 +17,7 @@ pub(crate) fn listing(id: &str, source: ListingSource) -> Listing {
         coordinates: None,
         address: format!("Address {id}"),
         price: "€500 per month".to_string(),
+        published_at: None,
         date: String::new(),
         description: "House".to_string(),
         bedrooms: None,

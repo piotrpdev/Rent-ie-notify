@@ -64,6 +64,9 @@ pub(crate) struct Listing {
     pub(crate) coordinates: Option<Coordinates>,
     pub(crate) address: String,
     pub(crate) price: String,
+    /// Publish time in epoch milliseconds, if the API sent one.
+    pub(crate) published_at: Option<u64>,
+    /// `published_at` formatted for display, e.g. `14th of November, 2026`.
     pub(crate) date: String,
     pub(crate) description: String,
     /// Numeric bedroom count from the search API (`None` for room shares).
@@ -185,6 +188,7 @@ impl RawListing {
             coordinates,
             address: self.title.trim().to_string(),
             price: self.price.trim().to_string(),
+            published_at: self.publish_date,
             date: self.publish_date.map_or_default(format_publish_date),
             bedrooms: bedroom_count(self.num_bedrooms.as_deref()),
             description: format_description([

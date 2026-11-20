@@ -166,18 +166,22 @@ fn retain_max_beds(listings: &mut Vec<Listing>, max_beds: u32) {
 
 /// Returns the representative of each group with no already-sent ID, alongside
 /// every ID in that group (all of which are recorded once it is sent).
+/// Ordered oldest first by publish date, so the newest listing ends up at the
+/// bottom of the Slack channel; listings without a date come last.
 fn select_new(
     groups: &[Vec<Listing>],
     sent_ids: &HashSet<String>,
 ) -> (Vec<Listing>, Vec<Vec<String>>) {
-    groups
+    let mut new: Vec<(Listing, Vec<String>)> = groups
         .iter()
         .filter(|group| !group.iter().any(|listing| sent_ids.contains(&listing.id)))
         .filter_map(|group| {
             let ids = group.iter().map(|listing| listing.id.clone()).collect();
             Some((dedupe::representative(group)?, ids))
         })
-        .unzip()
+        .collect();
+    new.sort_by_key(|(listing, _)| (listing.published_at.is_none(), listing.published_at));
+    new.into_iter().unzip()
 }
 
 /// Where new listings go.
@@ -486,6 +490,26 @@ mod tests {
         retain_max_beds(&mut listings, 4);
 
         assert_eq!(ids(&listings), vec!["1", "3"]);
+    }
+
+    #[test]
+    fn orders_new_listings_oldest_first_with_undated_last() {
+        let dated = |id: &str, published_at: Option<u64>| {
+            vec![Listing {
+                published_at,
+                ..listing(id, ListingSource::Daft)
+            }]
+        };
+        let groups = vec![
+            dated("new", Some(300)),
+            dated("undated", None),
+            dated("old", Some(100)),
+            dated("middle", Some(200)),
+        ];
+
+        let (new_listings, _) = select_new(&groups, &HashSet::new());
+
+        assert_eq!(ids(&new_listings), vec!["old", "middle", "new", "undated"]);
     }
 
     #[test]
