@@ -5,10 +5,14 @@ on:
   # schedule:
   #   - cron: '0 0,8-23 * * *'
 
-concurrency: production
+concurrency:
+  group: production
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
+  # Needed to find and download sent_ids.txt from earlier runs.
+  actions: read
 
 jobs:
   publish:
@@ -18,12 +22,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Download sent_ids.txt artifact
-        uses: actions/download-artifact@v7
-        continue-on-error: true
-        with:
-          name: sent_ids.txt
-          path: sent_ids.txt
+      # actions/download-artifact only sees the current run's artifacts, so
+      # look up the newest sent_ids.txt artifact from any earlier run instead.
+      - name: Restore sent_ids.txt from the latest run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=sent_ids.txt&per_page=1" \
+            --jq '.artifacts[0] | select(.expired == false) | .id')
+          if [ -n "$artifact_id" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > sent_ids.zip
+            unzip -o sent_ids.zip sent_ids.txt
+            rm sent_ids.zip
+            echo "Restored $(wc -l < sent_ids.txt) sent IDs from artifact ${artifact_id}."
+          else
+            echo "::warning::No sent_ids.txt artifact found; every listing will be treated as new. Consider running once with SEED_SENT_IDS=1."
+          fi
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.92.0
@@ -31,15 +45,25 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build
+      - name: Run
         run: cargo run --locked --release
         env:
-          RENT_IE_URL: ${{ secrets.RENT_IE_URL }}
+          # Secrets. Unset/blank values are treated as not configured.
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RENT_IE_URL: ${{ secrets.RENT_IE_URL }}
+          OPENROUTESERVICE_API_KEY: ${{ secrets.OPENROUTESERVICE_API_KEY }}
+          # Non-secret configuration (repository variables).
+          DAFT_IE_REQUEST: ${{ vars.DAFT_IE_REQUEST }}
+          PROPERTY_IE_URL: ${{ vars.PROPERTY_IE_URL }}
+          MAX_BEDS: ${{ vars.MAX_BEDS }}
+          PLACES_OF_INTEREST: ${{ vars.PLACES_OF_INTEREST }}
 
+      # Upload even when the run fails: IDs of messages Slack accepted before
+      # the failure are already recorded and must not be re-sent.
       - name: Upload sent_ids.txt artifact
+        if: always() && hashFiles('sent_ids.txt') != ''
         uses: actions/upload-artifact@v6
         with:
           name: sent_ids.txt
           path: sent_ids.txt
-        
+          retention-days: 90
