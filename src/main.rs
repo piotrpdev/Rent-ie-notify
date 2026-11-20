@@ -121,7 +121,13 @@ fn send_slack_listings(
             .header("Content-Type", "application/json")
             .body(slack_message_json)
             .send()
-            .map_err(|e| format!("Failed to send message to Slack: {e}"))?;
+            // The webhook URL is a secret; keep it out of the error message.
+            .map_err(|e| {
+                format!(
+                    "Failed to send message to Slack: {}",
+                    http::describe_error(e)
+                )
+            })?;
     }
 
     Ok(())

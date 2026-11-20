@@ -59,16 +59,24 @@ fn fetch_batch(listings: &[&Listing], places: &[Place], api_key: &str) -> Result
         .header("Content-Type", "application/json")
         .body(body)
         .send()
-        .map_err(|error| format!("OpenRouteService request failed: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "OpenRouteService request failed: {}",
+                crate::http::describe_error(error)
+            )
+        })?;
 
     let status = response.status().as_u16();
     if status != 200 {
         return Err(format!("OpenRouteService returned status {status}"));
     }
 
-    let json = response
-        .text()
-        .map_err(|error| format!("Failed to read OpenRouteService response: {error}"))?;
+    let json = response.text().map_err(|error| {
+        format!(
+            "Failed to read OpenRouteService response: {}",
+            crate::http::describe_error(error)
+        )
+    })?;
     let data: MatrixResponse = MatrixResponse::deserialize_json(&json)
         .map_err(|error| format!("Failed to parse OpenRouteService response: {error}"))?;
 

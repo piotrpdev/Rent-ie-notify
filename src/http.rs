@@ -6,12 +6,27 @@ use crate::{delay, listing::Listing};
 /// (page number or offset) of the next page, if any.
 pub(crate) type Page = (Vec<Listing>, Option<u32>);
 
+/// Formats a reqwest error with its cause chain but without the request URL,
+/// which can be a secret (Slack webhook, rent.ie search URL).
+pub(crate) fn describe_error(error: reqwest::Error) -> String {
+    let error = error.without_url();
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
 /// Sends `request` and returns the body of a 2xx response. `what` names the
 /// resource in error messages, e.g. "rent.ie search page".
+/// Error messages never include the request URL (see [`describe_error`]).
 pub(crate) fn send_text(request: RequestBuilder, what: &str) -> Result<String, String> {
     let response = request
         .send()
-        .map_err(|error| format!("Failed to fetch {what}: {error}"))?;
+        .map_err(|error| format!("Failed to fetch {what}: {}", describe_error(error)))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -28,7 +43,7 @@ pub(crate) fn send_text(request: RequestBuilder, what: &str) -> Result<String, S
 
     response
         .text()
-        .map_err(|error| format!("Failed to read {what}: {error}"))
+        .map_err(|error| format!("Failed to read {what}: {}", describe_error(error)))
 }
 
 /// Fetches pages sequentially until `fetch_page` reports no next cursor,
