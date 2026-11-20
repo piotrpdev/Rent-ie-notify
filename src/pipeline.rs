@@ -728,6 +728,9 @@ mod tests {
         assert!(message.contains("*Available from:* Now"));
         // The daft.ie copy represents the shared listing.
         assert!(message.contains("https://www.daft.ie/for-rent/slug-11/11"));
+        assert!(
+            message.contains("*Also on:* <https://www.rent.ie/houses-to-let/slug-11/11/|rent.ie>")
+        );
         assert_eq!(saved_ids(state_dir.path())?, vec!["10", "11", "12"]);
         assert_eq!(
             rent_server

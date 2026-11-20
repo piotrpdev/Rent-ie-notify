@@ -23,6 +23,7 @@ pub(crate) fn listing(id: &str, source: ListingSource) -> Listing {
         bedrooms: None,
         details: ListingDetails::default(),
         section: Section::HousesToLet,
+        also_on: Vec::new(),
     }
 }
 

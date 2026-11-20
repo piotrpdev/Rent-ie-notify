@@ -11,6 +11,15 @@ pub(crate) enum ListingSource {
 
 impl ListingSource {
     pub(crate) const ALL: [Self; 3] = [Self::Rent, Self::Daft, Self::Property];
+
+    /// The site's display name, e.g. `daft.ie`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Rent => "rent.ie",
+            Self::Daft => "daft.ie",
+            Self::Property => "property.ie",
+        }
+    }
 }
 
 /// The rent.ie section (`propertyType`) a listing belongs to. Property-detail
@@ -73,6 +82,8 @@ pub(crate) struct Listing {
     pub(crate) bedrooms: Option<u32>,
     pub(crate) details: ListingDetails,
     pub(crate) section: Section,
+    /// Links to the same ad on other sites (set on dedupe representatives).
+    pub(crate) also_on: Vec<(ListingSource, String)>,
 }
 
 /// Fields from the rent.ie property-detail endpoint; empty until fetched.
@@ -198,6 +209,7 @@ impl RawListing {
             ]),
             details: ListingDetails::default(),
             section,
+            also_on: Vec::new(),
         }
     }
 }

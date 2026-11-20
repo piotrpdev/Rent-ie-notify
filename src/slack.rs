@@ -76,6 +76,15 @@ fn listing_text(listing: &Listing) -> String {
             let _ = write!(text, "\n{label}{}", escape(value));
         }
     }
+
+    let also_on: Vec<String> = listing
+        .also_on
+        .iter()
+        .map(|(source, link)| format!("<{}|{}>", escape_url(link), source.name()))
+        .collect();
+    if !also_on.is_empty() {
+        let _ = write!(text, "\n*Also on:* {}", also_on.join(" · "));
+    }
     text
 }
 
@@ -455,6 +464,26 @@ mod tests {
         // images weren't the problem.
         assert_eq!(sink.join().map_err(|_| anyhow!("sink panicked"))?.len(), 4);
         Ok(())
+    }
+
+    #[test]
+    fn links_the_same_ad_on_other_sites() {
+        let listing = Listing {
+            also_on: vec![
+                (ListingSource::Rent, "https://www.rent.ie/x/1/".to_string()),
+                (
+                    ListingSource::Property,
+                    "https://www.property.ie/y/1/".to_string(),
+                ),
+            ],
+            ..test_support::listing("1", ListingSource::Daft)
+        };
+
+        let message = listings_to_slack_message_json(&[listing], &[], &RouteMap::new(), true);
+
+        assert!(message.contains(
+            "*Also on:* <https://www.rent.ie/x/1/|rent.ie> · <https://www.property.ie/y/1/|property.ie>"
+        ));
     }
 
     #[test]

@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::listing::{Listing, ListingSource};
 
 /// Prefers the daft.ie listing as the group representative, then falls back to
-/// the first listing in the group.
+/// the first listing in the group. Borrows coordinates from another member if
+/// needed, and records one link per other site the ad appears on.
 pub(crate) fn representative(group: &[Listing]) -> Option<Listing> {
     let mut representative = group
         .iter()
@@ -14,6 +15,15 @@ pub(crate) fn representative(group: &[Listing]) -> Option<Listing> {
     if representative.coordinates.is_none() {
         representative.coordinates = group.iter().find_map(|candidate| candidate.coordinates);
     }
+
+    representative.also_on = ListingSource::ALL
+        .into_iter()
+        .filter(|source| *source != representative.source)
+        .filter_map(|source| {
+            let other = group.iter().find(|listing| listing.source == source)?;
+            Some((source, other.link.clone()))
+        })
+        .collect();
 
     Some(representative)
 }
@@ -143,6 +153,18 @@ mod tests {
         assert_eq!(
             representative.as_ref().map(|listing| listing.id.as_str()),
             Some("2")
+        );
+        let also_on: Vec<(ListingSource, &str)> = representative
+            .iter()
+            .flat_map(|listing| &listing.also_on)
+            .map(|(source, link)| (*source, link.as_str()))
+            .collect();
+        assert_eq!(
+            also_on,
+            vec![
+                (ListingSource::Rent, "https://example.com/1"),
+                (ListingSource::Property, "https://example.com/3"),
+            ]
         );
     }
 
