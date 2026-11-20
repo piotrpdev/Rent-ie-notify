@@ -177,6 +177,7 @@ mod tests {
             price: "€500 per month".to_string(),
             date: "14th of November, 2026".to_string(),
             description: "House".to_string(),
+            bedrooms: None,
             details: ListingDetails {
                 available_from: "Now".to_string(),
                 minimum_lease: "1 Year".to_string(),
@@ -213,6 +214,7 @@ mod tests {
             price: "€500 per month".to_string(),
             date: "14th of November, 2026".to_string(),
             description: "House".to_string(),
+            bedrooms: None,
             details: ListingDetails {
                 available_from: "Now".to_string(),
                 minimum_lease: "1 Year".to_string(),

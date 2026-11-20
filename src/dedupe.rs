@@ -69,6 +69,7 @@ mod tests {
             price: String::new(),
             date: String::new(),
             description: String::new(),
+            bedrooms: None,
             details: ListingDetails::default(),
             detail_property_type: "houses-to-let".to_string(),
         }

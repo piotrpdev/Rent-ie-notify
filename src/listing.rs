@@ -27,6 +27,8 @@ pub(crate) struct Listing {
     pub(crate) price: String,
     pub(crate) date: String,
     pub(crate) description: String,
+    /// Numeric bedroom count from the search API (`None` for room shares).
+    pub(crate) bedrooms: Option<u32>,
     pub(crate) details: ListingDetails,
     pub(crate) detail_property_type: String,
 }
@@ -115,14 +117,10 @@ const fn month_name(month: i64) -> &'static str {
     }
 }
 
-pub(crate) fn bedroom_count_from_description(description: &str) -> Option<u32> {
-    description
-        .split(" · ")
-        .next()?
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()
+/// Parses the leading number of a `numBedrooms` value such as `"3 Bed"`.
+/// Room-share values like `"Double Room"` have no count.
+pub(crate) fn bedroom_count(num_bedrooms: Option<&str>) -> Option<u32> {
+    num_bedrooms?.split_whitespace().next()?.parse().ok()
 }
 
 pub(crate) fn format_publish_date(timestamp_ms: u64) -> String {
@@ -163,7 +161,7 @@ pub(crate) const fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bedroom_count_from_description, extract_image_keys, format_publish_date};
+    use super::{bedroom_count, extract_image_keys, format_publish_date};
 
     #[test]
     fn formats_publish_date_in_utc() {
@@ -186,11 +184,9 @@ mod tests {
 
     #[test]
     fn parses_numeric_bedroom_counts_from_descriptions() {
-        assert_eq!(
-            bedroom_count_from_description("16 Bed · 15 Bath · House"),
-            Some(16)
-        );
-        assert_eq!(bedroom_count_from_description("Double Room · House"), None);
+        assert_eq!(bedroom_count(Some("16 Bed")), Some(16));
+        assert_eq!(bedroom_count(Some("Double Room")), None);
+        assert_eq!(bedroom_count(None), None);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use reqwest::blocking::Client;
 use crate::delay;
 use crate::http::{self, Page};
 use crate::listing::{
-    Listing, ListingDetails, ListingSource, extract_image_keys, format_description,
+    Listing, ListingDetails, ListingSource, bedroom_count, extract_image_keys, format_description,
     format_publish_date,
 };
 use crate::next_data::{self, Paging};
@@ -143,6 +143,7 @@ fn listing_from_data(listing: ListingData, section: &str) -> Listing {
         address: title.trim().to_string(),
         price: price.trim().to_string(),
         date: publish_date.map(format_publish_date).unwrap_or_default(),
+        bedrooms: bedroom_count(num_bedrooms.as_deref()),
         description: format_description([num_bedrooms, num_bathrooms, property_type]),
         details: ListingDetails::default(),
         detail_property_type: section.to_string(),

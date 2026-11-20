@@ -204,10 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fetch_all_sources(rent_ie_url, daft_ie_request, property_ie_url)?;
 
     if let Some(max_beds) = max_beds {
-        listings.retain(|listing| {
-            listing::bedroom_count_from_description(&listing.description)
-                .is_none_or(|bedrooms| bedrooms <= max_beds)
-        });
+        listings.retain(|listing| listing.bedrooms.is_none_or(|bedrooms| bedrooms <= max_beds));
     }
 
     let listing_count = listings.len();

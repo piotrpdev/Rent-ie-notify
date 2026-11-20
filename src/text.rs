@@ -216,6 +216,7 @@ mod tests {
             price: price.to_string(),
             date: String::new(),
             description: "House".to_string(),
+            bedrooms: None,
             details: ListingDetails {
                 available_from: available_from.to_string(),
                 minimum_lease: minimum_lease.to_string(),
