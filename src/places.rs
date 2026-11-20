@@ -5,47 +5,36 @@ use crate::listing::Coordinates;
 
 pub(crate) const ENV_VAR: &str = "PLACES_OF_INTEREST";
 
-#[derive(Debug, Clone)]
-pub(crate) struct Place {
+/// A named location from `PLACES_OF_INTEREST`. (nanoserde-derive panics on a
+/// `pub(crate)` struct, so this is `pub`.)
+#[derive(Debug, Clone, DeJson)]
+pub struct Place {
     pub(crate) name: String,
     pub(crate) latitude: f64,
     pub(crate) longitude: f64,
 }
 
-#[derive(Debug, DeJson)]
-struct PlaceConfig {
-    name: String,
-    latitude: f64,
-    longitude: f64,
-}
-
+/// Parses and validates the `PLACES_OF_INTEREST` JSON array.
 pub(crate) fn parse(value: &str) -> Result<Vec<Place>> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(Vec::new());
     }
 
-    let configs: Vec<PlaceConfig> =
+    let places: Vec<Place> =
         Vec::deserialize_json(value).with_context(|| format!("Failed to parse {ENV_VAR} JSON"))?;
-    let mut places = Vec::with_capacity(configs.len());
 
-    for config in configs {
-        if config.name.trim().is_empty() {
+    for place in &places {
+        if place.name.trim().is_empty() {
             bail!("{ENV_VAR} contains a place with an empty name");
         }
-        if !(-90.0..=90.0).contains(&config.latitude)
-            || !(-180.0..=180.0).contains(&config.longitude)
+        if !(-90.0..=90.0).contains(&place.latitude) || !(-180.0..=180.0).contains(&place.longitude)
         {
             bail!(
                 "{ENV_VAR} contains invalid coordinates for '{}'",
-                config.name
+                place.name
             );
         }
-        places.push(Place {
-            name: config.name,
-            latitude: config.latitude,
-            longitude: config.longitude,
-        });
     }
 
     Ok(places)
