@@ -1,7 +1,10 @@
 name: 'Check'
 
 on:
+  # Branch pushes only run on the default branch; other branches are checked
+  # through their pull request, so PR branches aren't checked twice.
   push:
+    branches: [rust-slack-rentie-daftie-propertyie]
   pull_request:
   workflow_dispatch:
 
