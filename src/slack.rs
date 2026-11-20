@@ -57,6 +57,28 @@ fn escape_url(url: &str) -> String {
         .replace('>', "%3E")
 }
 
+/// The listing's title link plus one line per non-empty field.
+fn listing_text(listing: &Listing) -> String {
+    let mut text = format!(
+        "*<{}|{}>*",
+        escape_url(&listing.link),
+        escape(&listing.address)
+    );
+    let lines = [
+        ("", &listing.description),
+        ("*Price:* ", &listing.price),
+        ("*Posted:* ", &listing.date),
+        ("*Available from:* ", &listing.details.available_from),
+        ("*Minimum lease:* ", &listing.details.minimum_lease),
+    ];
+    for (label, value) in lines {
+        if !value.trim().is_empty() {
+            let _ = write!(text, "\n{label}{}", escape(value));
+        }
+    }
+    text
+}
+
 fn distance_line(listing: &Listing, places: &[Place], routes: &RouteMap) -> String {
     let Some(coordinates) = listing.coordinates else {
         return String::new();
@@ -112,30 +134,8 @@ impl WebhookPayload {
             .enumerate()
             .flat_map(|(i, listing)| {
                 let mut inner_blocks = Vec::new();
-                let mut text = format!(
-                    "*<{}|{}>*\n{}\n*Price:* {}\n*Posted:* {}",
-                    escape_url(&listing.link),
-                    escape(&listing.address),
-                    escape(&listing.description),
-                    escape(&listing.price),
-                    escape(&listing.date)
-                );
-
-                if !listing.details.available_from.is_empty() {
-                    let _ = write!(
-                        text,
-                        "\n*Available from:* {}",
-                        escape(&listing.details.available_from)
-                    );
-                }
-                if !listing.details.minimum_lease.is_empty() {
-                    let _ = write!(
-                        text,
-                        "\n*Minimum lease:* {}",
-                        escape(&listing.details.minimum_lease)
-                    );
-                }
-                text.push_str(&distance_line(listing, places, routes));
+                let text = listing_text(listing);
+                let text = text + &distance_line(listing, places, routes);
 
                 let mut listing_block = Block {
                     block_type: "section".to_string(),
@@ -455,5 +455,23 @@ mod tests {
         // images weren't the problem.
         assert_eq!(sink.join().map_err(|_| anyhow!("sink panicked"))?.len(), 4);
         Ok(())
+    }
+
+    #[test]
+    fn omits_empty_fields() {
+        let listing = Listing {
+            description: String::new(),
+            date: String::new(),
+            ..test_support::listing("1", ListingSource::Rent)
+        };
+
+        let message = listings_to_slack_message_json(&[listing], &[], &RouteMap::new(), true);
+
+        assert!(
+            message.contains(
+                r#""text":"*<https://example.com/1|Address 1>*\n*Price:* €500 per month""#
+            )
+        );
+        assert!(!message.contains("Posted"));
     }
 }
