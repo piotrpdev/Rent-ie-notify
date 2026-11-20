@@ -38,7 +38,7 @@ pub(crate) fn load(path: &Path) -> Result<HashSet<String>, String> {
     }
 }
 
-/// Appends `ids`, one per line, creating the file if needed.
+/// Appends `ids`, one per line, creating the file if needed, and syncs it to disk.
 pub(crate) fn append(path: &Path, ids: &[String]) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
@@ -53,7 +53,11 @@ pub(crate) fn append(path: &Path, ids: &[String]) -> Result<(), String> {
     let mut content = ids.join("\n");
     content.push('\n');
     file.write_all(content.as_bytes())
-        .map_err(|error| format!("Failed to write {}: {error}", path.display()))
+        .map_err(|error| format!("Failed to write {}: {error}", path.display()))?;
+    // These IDs were just posted to Slack; flush them to disk so a power loss
+    // (e.g. a Raspberry Pi on an SD card) can't drop them and cause re-posts.
+    file.sync_data()
+        .map_err(|error| format!("Failed to sync {}: {error}", path.display()))
 }
 
 #[cfg(test)]
