@@ -1,7 +1,8 @@
 //! Shared helpers for unit tests.
 
-use anyhow::{Context as _, Result, anyhow};
 use std::thread::JoinHandle;
+
+use anyhow::{Context as _, Result, anyhow};
 
 use crate::listing::{Listing, ListingDetails, ListingSource};
 

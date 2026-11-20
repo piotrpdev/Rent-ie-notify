@@ -1,6 +1,5 @@
 //! `sent_ids.txt`: the IDs of every listing already posted to Slack.
 
-use anyhow::{Context as _, Result, anyhow};
 use std::{
     collections::HashSet,
     fs::{File, OpenOptions, TryLockError},
@@ -8,6 +7,7 @@ use std::{
     path::Path,
 };
 
+use anyhow::{Context as _, Result, anyhow};
 pub(crate) const SENT_IDS_FILENAME: &str = "sent_ids.txt";
 pub(crate) const LOCK_FILENAME: &str = "sent_ids.txt.lock";
 

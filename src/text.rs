@@ -1,4 +1,3 @@
-use anyhow::{Context as _, Result};
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -6,6 +5,8 @@ use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use anyhow::{Context as _, Result};
 
 use crate::listing::Listing;
 
