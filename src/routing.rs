@@ -1,6 +1,6 @@
-use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 
+use anyhow::{Context as _, Result};
 use nanoserde::{DeJson, SerJson};
 use reqwest::blocking::Client;
 

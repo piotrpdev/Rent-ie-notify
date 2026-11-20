@@ -1,8 +1,7 @@
+use std::{fmt::Write as _, time::Duration};
+
 use anyhow::{Result, anyhow};
 use nanoserde::SerJson;
-use std::fmt::Write as _;
-use std::time::Duration;
-
 use reqwest::{StatusCode, blocking::Client, header::RETRY_AFTER};
 
 use crate::http;
@@ -313,6 +312,11 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::{Sender, escape, escape_url, listings_to_slack_message_json};
+    use crate::listing::{Coordinates, Listing, ListingDetails, ListingSource};
+    use crate::places::Place;
+    use crate::routing::{RouteMap, RouteMeasurement};
+    use crate::test_support::{self, run_sink};
+
     #[test]
     fn escapes_mrkdwn_control_characters() {
         assert_eq!(
@@ -324,10 +328,6 @@ mod tests {
             "https://example.com/a%7Cb?x=%3C1%3E"
         );
     }
-    use crate::listing::{Coordinates, Listing, ListingDetails, ListingSource};
-    use crate::places::Place;
-    use crate::routing::{RouteMap, RouteMeasurement};
-    use crate::test_support::{self, run_sink};
 
     #[test]
     fn includes_configured_distances() {

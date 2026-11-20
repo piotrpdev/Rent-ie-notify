@@ -1,5 +1,6 @@
-use anyhow::{Result, anyhow, bail};
 use std::{collections::HashSet, path::Path, thread};
+
+use anyhow::{Result, anyhow, bail};
 
 use crate::config::{Config, Sources};
 use crate::endpoints::Endpoints;
