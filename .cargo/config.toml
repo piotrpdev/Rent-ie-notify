@@ -1,2 +1,0 @@
-[alias]
-slack-sink-e2e = "run --example slack_sink_e2e --"

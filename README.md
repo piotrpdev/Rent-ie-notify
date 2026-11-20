@@ -25,14 +25,24 @@ Run all checks:
 scripts/check.sh
 ```
 
-Run the binary end-to-end against a local Slack sink (no real webhook, temporary `sent_ids.txt`):
+The unit tests include end-to-end runs against local fake sites and a fake
+Slack webhook, so `scripts/check.sh` needs no network access.
+
+To try your real search configuration without posting anything, run a dry run
+from an empty directory: every listing is treated as new, the Slack payloads
+are printed, and no state is written.
 
 ```sh
-cargo build --locked
-cargo slack-sink-e2e --daft-request-file path/to/daft-request.json
+cargo build --locked --release
+cd "$(mktemp -d)"
+# Load your settings (same format as rent-ie-notify.env.example) without
+# putting secrets on the command line or in shell history.
+set -a; . ~/rent-ie-notify.env; set +a
+DRY_RUN=1 ~/Rent-ie-notify/target/release/Rent-ie-notify
 ```
 
-`RENT_IE_URL`, `DAFT_IE_REQUEST`, and `PROPERTY_IE_URL` are picked up from the environment unless overridden with `--rent-url` / `--daft-request` / `--property-url`. OpenRouteService is disabled during this check by default; pass `--with-routing` to forward `OPENROUTESERVICE_API_KEY` and exercise routing.
+Unset sources are skipped. OpenRouteService is only called if
+`OPENROUTESERVICE_API_KEY` is set.
 
 ## Raspberry Pi / systemd setup
 

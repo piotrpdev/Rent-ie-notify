@@ -23,7 +23,6 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `src/slack.rs` — Slack Block Kit payload built with `nanoserde` (scraped text is mrkdwn-escaped), plus `Sender`, which spaces messages ~1.1 s apart, waits out 429s (`Retry-After`, max 3 retries), and retries a rejected message once without images.
 - `src/test_support.rs` — `#[cfg(test)]` listing builder, `run_server` (local HTTP server replaying canned responses and recording requests), and the Slack-like `run_sink`. `delay::sleep` is a no-op in test builds.
 - `scripts/check.sh` — runs fmt, clippy, unit tests, archive tests, and the release build.
-- `examples/slack_sink_e2e.rs` — runs the real binary against a local Slack sink in a temporary working directory; `cargo slack-sink-e2e` is the alias.
 - `archives/rentie/` / `archives/daftie/` / `archives/propertyie/` — saved API JSON responses used by the ignored archive tests; not read at runtime.
 - `check_rent_ie.service` / `check_rent_ie.timer` — hourly systemd deployment (`Type=oneshot`, no restart-on-failure, 30 min timeout); hardcodes user and repo/binary paths and loads config from `EnvironmentFile=/etc/rent-ie-notify.env`.
 - `rent-ie-notify.env.example` — placeholder template for that environment file.
@@ -37,7 +36,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (unit tests plus ignored archive-backed tests).
 - Check everything: `scripts/check.sh` (also runs the archive tests and release build).
 - Archive check: `cargo test --locked -- --ignored` (parses every fixture in `archives/`).
-- Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`/`PROPERTY_IE_URL`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.
+- Try a real configuration safely: `DRY_RUN=1` from an empty directory (every listing is new, payloads are printed, no state written). End-to-end behaviour against fake sites/Slack is covered by `pipeline::tests`.
 - Build: `cargo build --release` → `target/release/Rent-ie-notify`.
 - Run from the repo root with `SLACK_WEBHOOK_URL` and at least one (non-blank; blank values count as unset) of `RENT_IE_URL`, `DAFT_IE_REQUEST`, or `PROPERTY_IE_URL` set. Optional `PLACES_OF_INTEREST` adds distance lines; optional `OPENROUTESERVICE_API_KEY` enables driving times/distances; optional `TEXT_REPORT_DIR` writes grouped timestamped text reports; optional `MAX_BEDS` caps bedrooms across all sources.
 - Rust 1.100.0 is pinned by `rust-toolchain.toml` (rustup installs it automatically) and by both workflows; `Cargo.toml` sets `rust-version = "1.100"` to match. Bump all of these together (plus the rustup line in README.md).
