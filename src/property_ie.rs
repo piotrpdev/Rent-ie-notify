@@ -1,13 +1,15 @@
 use nanoserde::DeJson;
+use reqwest::blocking::Client;
 use tl::{Node, ParserOptions};
 
+use crate::http::{self, Page};
 use crate::listing::{
     Listing, ListingSource, extract_image_keys, format_description, format_publish_date,
 };
 
 const NEXT_DATA_SELECTOR: &str = "script#__NEXT_DATA__";
 const PROPERTY_IE_BASE_URL: &str = "https://www.property.ie";
-pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36";
 
 #[derive(Debug, DeJson)]
@@ -187,7 +189,7 @@ pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
     Ok(url)
 }
 
-pub(crate) fn extract_page_from_json(json: &str) -> Result<(Vec<Listing>, Option<u32>), String> {
+pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
     let data: SearchData = SearchData::deserialize_json(json)
         .map_err(|error| format!("Failed to parse property.ie API JSON: {error}"))?;
     let SearchPageProps {
@@ -206,6 +208,36 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<(Vec<Listing>, Option
         .collect();
 
     Ok((listings, next_page))
+}
+
+/// Fetches every results page for a property.ie search URL.
+pub(crate) fn fetch_listings(search_url: &str) -> Result<Vec<Listing>, String> {
+    // property.ie requires HTTP/2; Cloudflare returns 403 for HTTP/1.1 requests.
+    let client = Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .map_err(|error| format!("Failed to create property.ie HTTP client: {error}"))?;
+
+    println!("Fetching property.ie search page metadata...");
+    let request = client
+        .get(search_url)
+        .header(
+            "accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        )
+        .header("accept-language", "en-GB,en-US;q=0.9,en;q=0.8")
+        .header("referer", "https://www.property.ie/");
+    let html = http::send_text(request, "property.ie search page")?;
+    let api_url = search_api_url(&html)?;
+
+    http::paginate(|page| {
+        let page_url =
+            page.map_or_else(|| api_url.clone(), |page| format!("{api_url}&page={page}"));
+        println!("Fetching property.ie listings from API...");
+        let request = client.get(page_url).header("accept", "application/json");
+        let json = http::send_text(request, "property.ie listings")?;
+        extract_page_from_json(&json)
+    })
 }
 
 #[cfg(test)]

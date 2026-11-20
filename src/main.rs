@@ -5,6 +5,7 @@ use crate::listing::Listing;
 pub mod daft_ie;
 pub mod dedupe;
 pub mod delay;
+pub mod http;
 pub mod listing;
 pub mod places;
 pub mod property_ie;
@@ -31,201 +32,16 @@ fn parse_sent_ids(content: &str) -> Vec<String> {
         .collect()
 }
 
-fn fetch_rent_ie_listings(rent_ie_url: &str) -> Result<(Vec<Listing>, String), String> {
-    // `_next/data` URLs include a deployment-specific build ID that is only
-    // published in the search page's `__NEXT_DATA__` metadata.
-    let client = reqwest::blocking::Client::new();
-    println!("Fetching rent.ie search page metadata...");
-    let response = client
-        .get(rent_ie_url)
-        .send()
-        .map_err(|e| format!("Failed to fetch rent.ie search page: {e}"))?;
-
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(format!(
-            "Failed to fetch rent.ie search page: received status code {status}. Cloudflare may be blocking the request, try from a residential IP?",
-        ));
-    }
-
-    let html_response = response
-        .text()
-        .map_err(|e| format!("Failed to read search page body: {e}"))?;
-
-    let build_id = rent_ie::build_id_from_html(&html_response)?;
-    let search_api_url = rent_ie::search_api_url(&html_response)
-        .map_err(|e| format!("Failed to build rent.ie API URL: {e}"))?;
-
-    // rent.ie ignores pageSize/page_size, so paging is the only way to fetch
-    // more than the first 20 results.
-    let mut listings = Vec::new();
-    let mut next_page = None;
-
-    loop {
-        let page_url = next_page.map_or_else(
-            || search_api_url.clone(),
-            |page| format!("{search_api_url}&page={page}"),
-        );
-
-        println!("Fetching rent.ie listings from API...");
-        let api_response = client
-            .get(page_url)
-            .send()
-            .map_err(|e| format!("Failed to fetch rent.ie listings from API: {e}"))?;
-
-        let status = api_response.status().as_u16();
-        if status != 200 {
-            return Err(format!(
-                "Failed to fetch rent.ie listings from API: received status code {status}",
-            ));
-        }
-
-        let api_json = api_response
-            .text()
-            .map_err(|e| format!("Failed to read API response body: {e}"))?;
-
-        let (page_listings, page_next) = rent_ie::extract_page_from_json(&api_json)
-            .map_err(|e| format!("Failed to extract rent.ie listings from API response: {e}"))?;
-        listings.extend(page_listings);
-
-        let Some(page_next) = page_next else {
-            break;
-        };
-        delay::sleep();
-        next_page = Some(page_next);
-    }
-
-    Ok((listings, build_id))
-}
-
-fn fetch_daft_ie_listings(request_body: &str) -> Result<Vec<Listing>, String> {
-    let client = reqwest::blocking::Client::new();
-    let mut listings = Vec::new();
-    let mut request_body = request_body.to_string();
-
-    loop {
-        println!("Fetching daft.ie listings from API...");
-        // The daft gateway is strict about browser-like headers: without
-        // brand/platform it returns 400, and without origin/referer it returns 403.
-        let response = client
-            .post(daft_ie::API_URL)
-            .header("accept", "application/json")
-            .header("brand", "daft")
-            .header("content-type", "application/json")
-            .header("origin", "https://www.daft.ie")
-            .header("platform", "web")
-            .header("referer", "https://www.daft.ie/")
-            .body(request_body.clone())
-            .send()
-            .map_err(|e| format!("Failed to fetch daft.ie listings from API: {e}"))?;
-
-        let status = response.status().as_u16();
-        if status != 200 {
-            return Err(format!(
-                "Failed to fetch daft.ie listings from API: received status code {status}",
-            ));
-        }
-
-        let json = response
-            .text()
-            .map_err(|e| format!("Failed to read daft.ie API response body: {e}"))?;
-
-        let (page_listings, next_from) = daft_ie::extract_page_from_json(&json)
-            .map_err(|e| format!("Failed to extract daft.ie listings from API response: {e}"))?;
-        listings.extend(page_listings);
-
-        let Some(next_from) = next_from else {
-            break;
-        };
-
-        request_body = daft_ie::request_body_with_offset(&request_body, next_from)
-            .map_err(|e| format!("Failed to update daft.ie paging: {e}"))?;
-        delay::sleep();
-    }
-
-    Ok(listings)
-}
-
-fn fetch_property_ie_listings(property_ie_url: &str) -> Result<Vec<Listing>, String> {
-    // property.ie requires HTTP/2; Cloudflare returns 403 for HTTP/1.1 requests.
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(property_ie::USER_AGENT)
-        .build()
-        .map_err(|error| format!("Failed to create property.ie HTTP client: {error}"))?;
-
-    println!("Fetching property.ie search page metadata...");
-    let response = client
-        .get(property_ie_url)
-        .header(
-            "accept",
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        )
-        .header("accept-language", "en-GB,en-US;q=0.9,en;q=0.8")
-        .header("referer", "https://www.property.ie/")
-        .send()
-        .map_err(|error| format!("Failed to fetch property.ie search page: {error}"))?;
-
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(format!(
-            "Failed to fetch property.ie search page: received status code {status}"
-        ));
-    }
-
-    let html = response
-        .text()
-        .map_err(|error| format!("Failed to read property.ie search page: {error}"))?;
-    let search_api_url = property_ie::search_api_url(&html)?;
-
-    let mut listings = Vec::new();
-    let mut next_page = None;
-
-    loop {
-        let page_url = next_page.map_or_else(
-            || search_api_url.clone(),
-            |page| format!("{search_api_url}&page={page}"),
-        );
-
-        println!("Fetching property.ie listings from API...");
-        let api_response = client
-            .get(page_url)
-            .header("accept", "application/json")
-            .send()
-            .map_err(|error| format!("Failed to fetch property.ie listings: {error}"))?;
-
-        let status = api_response.status().as_u16();
-        if status != 200 {
-            return Err(format!(
-                "Failed to fetch property.ie listings: received status code {status}"
-            ));
-        }
-
-        let json = api_response
-            .text()
-            .map_err(|error| format!("Failed to read property.ie API response: {error}"))?;
-        let (page_listings, page_next) = property_ie::extract_page_from_json(&json)?;
-        listings.extend(page_listings);
-
-        let Some(page_next) = page_next else {
-            break;
-        };
-        delay::sleep();
-        next_page = Some(page_next);
-    }
-
-    Ok(listings)
-}
-
 fn fetch_all_sources(
     rent_ie_url: Option<String>,
     daft_ie_request: Option<String>,
     property_ie_url: Option<String>,
 ) -> Result<(Vec<Listing>, Option<String>), String> {
-    let rent_thread = rent_ie_url.map(|url| thread::spawn(move || fetch_rent_ie_listings(&url)));
+    let rent_thread = rent_ie_url.map(|url| thread::spawn(move || rent_ie::fetch_listings(&url)));
     let daft_thread =
-        daft_ie_request.map(|body| thread::spawn(move || fetch_daft_ie_listings(&body)));
+        daft_ie_request.map(|body| thread::spawn(move || daft_ie::fetch_listings(&body)));
     let property_thread =
-        property_ie_url.map(|url| thread::spawn(move || fetch_property_ie_listings(&url)));
+        property_ie_url.map(|url| thread::spawn(move || property_ie::fetch_listings(&url)));
 
     let rent_result: Result<(Vec<Listing>, Option<String>), String> = match rent_thread {
         Some(handle) => handle
@@ -252,73 +68,6 @@ fn fetch_all_sources(
     listings.extend(property_result?);
 
     Ok((listings, rent_build_id))
-}
-
-fn fetch_rent_build_id() -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
-    let response = client
-        .get("https://www.rent.ie/")
-        .send()
-        .map_err(|error| format!("Failed to fetch rent.ie homepage: {error}"))?;
-
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(format!(
-            "Failed to fetch rent.ie homepage: received status code {status}"
-        ));
-    }
-
-    let html = response
-        .text()
-        .map_err(|error| format!("Failed to read rent.ie homepage: {error}"))?;
-
-    rent_ie::build_id_from_html(&html)
-}
-
-fn add_listing_details(listings: &mut [Listing], build_id: &str) {
-    let count = listings.len();
-    let client = reqwest::blocking::Client::new();
-    println!("Fetching property availability details...");
-
-    for (index, listing) in listings.iter_mut().enumerate() {
-        let result = (|| -> Result<(), String> {
-            let url = rent_ie::property_details_url(build_id, listing)?;
-            let response = client
-                .get(url)
-                .header("accept", "application/json")
-                .send()
-                .map_err(|error| format!("Failed to fetch property details: {error}"))?;
-
-            let status = response.status().as_u16();
-            if status != 200 {
-                return Err(format!("property details returned status {status}"));
-            }
-
-            let json = response
-                .text()
-                .map_err(|error| format!("Failed to read property details: {error}"))?;
-            let details = rent_ie::extract_details_from_json(&json)?;
-            listing.available_from = details.available_from;
-            listing.minimum_lease = details.minimum_lease;
-            listing.single_bedrooms = details.single_bedrooms;
-            listing.double_bedrooms = details.double_bedrooms;
-            listing.twin_bedrooms = details.twin_bedrooms;
-            listing.bathrooms = details.bathrooms;
-
-            Ok(())
-        })();
-
-        if let Err(error) = result {
-            eprintln!(
-                "Failed to fetch property details for {}: {error}",
-                listing.id
-            );
-        }
-
-        if index + 1 < count {
-            delay::sleep();
-        }
-    }
 }
 
 fn copy_detail_fields(target: &mut Listing, source: &Listing) {
@@ -397,7 +146,7 @@ fn prepare_details_and_report(
 
 fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<String>) {
     let details_build_id = rent_build_id.map_or_else(
-        || match fetch_rent_build_id() {
+        || match rent_ie::fetch_build_id() {
             Ok(build_id) => Some(build_id),
             Err(error) => {
                 eprintln!("Failed to fetch rent.ie build ID for property details: {error}");
@@ -408,7 +157,7 @@ fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<Stri
     );
 
     if let Some(build_id) = details_build_id {
-        add_listing_details(listings, &build_id);
+        rent_ie::add_listing_details(listings, &build_id);
     }
 }
 

@@ -1,11 +1,13 @@
 use nanoserde::DeJson;
+use reqwest::blocking::Client;
 
+use crate::http::{self, Page};
 use crate::listing::{
     Coordinates, Listing, ListingSource, extract_image_keys, format_description,
     format_publish_date,
 };
 
-pub(crate) const API_URL: &str = "https://gateway.daft.ie/api/v2/ads/listings";
+const API_URL: &str = "https://gateway.daft.ie/api/v2/ads/listings";
 
 const DAFT_IE_BASE_URL: &str = "https://www.daft.ie";
 
@@ -142,7 +144,7 @@ fn absolute_url(path: &str) -> String {
     }
 }
 
-pub(crate) fn extract_page_from_json(json: &str) -> Result<(Vec<Listing>, Option<u32>), String> {
+pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
     let data: SearchData = SearchData::deserialize_json(json)
         .map_err(|e| format!("Failed to parse daft.ie API JSON: {e}"))?;
 
@@ -214,6 +216,35 @@ pub(crate) fn request_body_with_offset(request_body: &str, offset: u32) -> Resul
     );
 
     Ok(updated)
+}
+
+/// Fetches every results page for a daft.ie gateway request body.
+pub(crate) fn fetch_listings(request_body: &str) -> Result<Vec<Listing>, String> {
+    let client = Client::new();
+
+    http::paginate(|offset| {
+        let body = match offset {
+            None => request_body.to_string(),
+            Some(offset) => request_body_with_offset(request_body, offset)
+                .map_err(|e| format!("Failed to update daft.ie paging: {e}"))?,
+        };
+
+        println!("Fetching daft.ie listings from API...");
+        // The daft gateway is strict about browser-like headers: without
+        // brand/platform it returns 400, and without origin/referer it returns 403.
+        let request = client
+            .post(API_URL)
+            .header("accept", "application/json")
+            .header("brand", "daft")
+            .header("content-type", "application/json")
+            .header("origin", DAFT_IE_BASE_URL)
+            .header("platform", "web")
+            .header("referer", "https://www.daft.ie/")
+            .body(body);
+        let json = http::send_text(request, "daft.ie listings")?;
+        extract_page_from_json(&json)
+            .map_err(|e| format!("Failed to extract daft.ie listings from API response: {e}"))
+    })
 }
 
 #[cfg(test)]

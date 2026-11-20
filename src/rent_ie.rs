@@ -1,6 +1,9 @@
 use nanoserde::DeJson;
+use reqwest::blocking::Client;
 use tl::{Node, ParserOptions};
 
+use crate::delay;
+use crate::http::{self, Page};
 use crate::listing::{
     Listing, ListingSource, extract_image_keys, format_description, format_publish_date,
 };
@@ -297,7 +300,7 @@ pub(crate) fn extract_details_from_json(json: &str) -> Result<ListingDetails, St
     Ok(details)
 }
 
-pub(crate) fn extract_page_from_json(json: &str) -> Result<(Vec<Listing>, Option<u32>), String> {
+pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
     let data: SearchData =
         SearchData::deserialize_json(json).map_err(|e| format!("Failed to parse API JSON: {e}"))?;
     let SearchPageProps {
@@ -316,6 +319,81 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<(Vec<Listing>, Option
         .collect();
 
     Ok((listings, next_page))
+}
+
+/// Fetches every results page for a rent.ie search URL. Also returns the
+/// Next.js build ID, which is needed for property-detail requests.
+pub(crate) fn fetch_listings(search_url: &str) -> Result<(Vec<Listing>, String), String> {
+    // `_next/data` URLs include a deployment-specific build ID that is only
+    // published in the search page's `__NEXT_DATA__` metadata.
+    let client = Client::new();
+    println!("Fetching rent.ie search page metadata...");
+    let html = http::send_text(client.get(search_url), "rent.ie search page")?;
+
+    let build_id = build_id_from_html(&html)?;
+    let api_url =
+        search_api_url(&html).map_err(|e| format!("Failed to build rent.ie API URL: {e}"))?;
+
+    // rent.ie ignores pageSize/page_size, so paging is the only way to fetch
+    // more than the first 20 results.
+    let listings = http::paginate(|page| {
+        let page_url =
+            page.map_or_else(|| api_url.clone(), |page| format!("{api_url}&page={page}"));
+        println!("Fetching rent.ie listings from API...");
+        let json = http::send_text(client.get(page_url), "rent.ie listings")?;
+        extract_page_from_json(&json)
+            .map_err(|e| format!("Failed to extract rent.ie listings from API response: {e}"))
+    })?;
+
+    Ok((listings, build_id))
+}
+
+/// Reads the current Next.js build ID from the rent.ie homepage.
+pub(crate) fn fetch_build_id() -> Result<String, String> {
+    let html = http::send_text(Client::new().get(RENT_IE_BASE_URL), "rent.ie homepage")?;
+    build_id_from_html(&html)
+}
+
+fn fetch_details(
+    client: &Client,
+    build_id: &str,
+    listing: &Listing,
+) -> Result<ListingDetails, String> {
+    let url = property_details_url(build_id, listing)?;
+    let json = http::send_text(
+        client.get(url).header("accept", "application/json"),
+        "property details",
+    )?;
+    extract_details_from_json(&json)
+}
+
+/// Fills in availability, lease, and room details for each listing. Failures
+/// are logged per listing and leave its detail fields empty.
+pub(crate) fn add_listing_details(listings: &mut [Listing], build_id: &str) {
+    let count = listings.len();
+    let client = Client::new();
+    println!("Fetching property availability details...");
+
+    for (index, listing) in listings.iter_mut().enumerate() {
+        match fetch_details(&client, build_id, listing) {
+            Ok(details) => {
+                listing.available_from = details.available_from;
+                listing.minimum_lease = details.minimum_lease;
+                listing.single_bedrooms = details.single_bedrooms;
+                listing.double_bedrooms = details.double_bedrooms;
+                listing.twin_bedrooms = details.twin_bedrooms;
+                listing.bathrooms = details.bathrooms;
+            }
+            Err(error) => eprintln!(
+                "Failed to fetch property details for {}: {error}",
+                listing.id
+            ),
+        }
+
+        if index + 1 < count {
+            delay::sleep();
+        }
+    }
 }
 
 #[cfg(test)]
