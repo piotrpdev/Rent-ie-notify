@@ -94,42 +94,60 @@ fn fetch_all_sources(
     })
 }
 
-/// Turns source failures that were tolerated during the run into a non-zero
-/// exit, so systemd/journald still flag the run as failed.
+/// Turns failures that were tolerated during the run (failed sources, Slack
+/// rejections) into a non-zero exit, so systemd/journald still flag the run.
 fn finish(failures: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if failures.is_empty() {
         println!("Done.");
         Ok(())
     } else {
-        Err(format!("Some sources failed: {}", failures.join("; ")).into())
+        Err(format!("Run finished with errors: {}", failures.join("; ")).into())
     }
 }
 
+/// Returns each ID once, keeping first-seen order.
+fn unique_ids<'a>(ids: impl IntoIterator<Item = &'a String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    ids.into_iter()
+        .filter(|id| seen.insert(id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Posts new listings to Slack in chunks and appends each chunk's group IDs to
+/// the state file as soon as Slack accepts it, so a later failure neither loses
+/// nor re-sends earlier chunks. Rejected chunks are skipped (and retried next
+/// run); failing to record state aborts immediately to avoid duplicates.
 fn send_slack_listings(
     webhook_url: &str,
     listings: &[Listing],
-    places: &[crate::places::Place],
+    group_ids: &[Vec<String>],
+    places: &[places::Place],
     routes: &routing::RouteMap,
-) -> Result<(), Box<dyn std::error::Error>> {
+    sent_ids_path: &Path,
+) -> Result<(), String> {
     let client = reqwest::blocking::Client::new();
-    for chunk in listings.chunks(SLACK_LISTINGS_PER_MESSAGE) {
-        println!("Sending {} new listings to Slack...", chunk.len());
-        let slack_message_json = slack::listings_to_slack_message_json(chunk, places, routes);
+    let mut rejected = 0;
 
-        client
-            .post(webhook_url)
-            .header("Content-Type", "application/json")
-            .body(slack_message_json)
-            .send()
-            // The webhook URL is a secret; keep it out of the error message.
-            .map_err(|e| {
-                format!(
-                    "Failed to send message to Slack: {}",
-                    http::describe_error(e)
-                )
-            })?;
+    for (chunk, chunk_ids) in listings
+        .chunks(SLACK_LISTINGS_PER_MESSAGE)
+        .zip(group_ids.chunks(SLACK_LISTINGS_PER_MESSAGE))
+    {
+        println!("Sending {} new listings to Slack...", chunk.len());
+        if let Err(error) = slack::send(&client, webhook_url, chunk, places, routes) {
+            eprintln!("{error}");
+            rejected += chunk.len();
+            continue;
+        }
+
+        state::append(sent_ids_path, &unique_ids(chunk_ids.iter().flatten()))?;
     }
 
+    if rejected > 0 {
+        return Err(format!(
+            "Slack did not accept {rejected} listings; they will be retried next run"
+        ));
+    }
     Ok(())
 }
 
@@ -246,7 +264,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let FetchedListings {
         mut listings,
         rent_build_id,
-        failures,
+        mut failures,
     } = fetch_all_sources(rent_ie_url, daft_ie_request, property_ie_url)?;
 
     if let Some(max_beds) = max_beds {
@@ -260,15 +278,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         groups.len()
     );
 
-    let new_groups: Vec<Vec<Listing>> = groups
+    // Each new group's representative, alongside every ID in that group.
+    let (mut new_listings, new_group_ids): (Vec<Listing>, Vec<Vec<String>>) = groups
         .iter()
         .filter(|group| !group.iter().any(|listing| sent_ids.contains(&listing.id)))
-        .cloned()
-        .collect();
-    let mut new_listings: Vec<Listing> = new_groups
-        .iter()
-        .filter_map(|group| dedupe::representative(group))
-        .collect();
+        .filter_map(|group| {
+            let ids = group.iter().map(|listing| listing.id.clone()).collect();
+            Some((dedupe::representative(group)?, ids))
+        })
+        .unzip();
 
     prepare_details_and_report(
         &groups,
@@ -289,18 +307,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             routing::fetch_routes(&new_listings, &places, api_key)
         });
 
-    send_slack_listings(&slack_webhook_url, &new_listings, &places, &routes)?;
-
-    let mut seen = HashSet::new();
-    let new_ids: Vec<String> = new_groups
-        .iter()
-        .flatten()
-        .filter(|listing| seen.insert(listing.id.as_str()))
-        .map(|listing| listing.id.clone())
-        .collect();
-
-    println!("Saving sent listing IDs to {}...", state::SENT_IDS_FILENAME);
-    state::append(sent_ids_path, &new_ids)?;
+    if let Err(error) = send_slack_listings(
+        &slack_webhook_url,
+        &new_listings,
+        &new_group_ids,
+        &places,
+        &routes,
+        sent_ids_path,
+    ) {
+        failures.push(error);
+    }
 
     finish(&failures)
 }
