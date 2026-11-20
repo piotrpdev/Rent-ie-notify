@@ -140,9 +140,7 @@ fn select_new(
 
 /// Where new listings go.
 enum Delivery {
-    Slack {
-        webhook_url: String,
-    },
+    Slack(slack::Sender),
     /// `DRY_RUN=1`: print the Slack payloads and leave `sent_ids.txt` alone.
     DryRun,
 }
@@ -152,22 +150,21 @@ enum Delivery {
 /// nor re-sends earlier chunks. Rejected chunks are skipped (and retried next
 /// run); failing to record state aborts immediately to avoid duplicates.
 fn send_slack_listings(
-    delivery: &Delivery,
+    delivery: &mut Delivery,
     listings: &[Listing],
     group_ids: &[Vec<String>],
     places: &[places::Place],
     routes: &routing::RouteMap,
     sent_ids_path: &Path,
 ) -> Result<(), String> {
-    let client = reqwest::blocking::Client::new();
     let mut rejected = 0;
 
     for (chunk, chunk_ids) in listings
         .chunks(SLACK_LISTINGS_PER_MESSAGE)
         .zip(group_ids.chunks(SLACK_LISTINGS_PER_MESSAGE))
     {
-        let webhook_url = match delivery {
-            Delivery::Slack { webhook_url } => webhook_url,
+        let sender = match delivery {
+            Delivery::Slack(sender) => sender,
             Delivery::DryRun => {
                 println!(
                     "DRY_RUN: would send {} listings to Slack:\n{}",
@@ -179,7 +176,7 @@ fn send_slack_listings(
         };
 
         println!("Sending {} new listings to Slack...", chunk.len());
-        if let Err(error) = slack::send(&client, webhook_url, chunk, places, routes) {
+        if let Err(error) = sender.send(chunk, places, routes) {
             eprintln!("{error}");
             rejected += chunk.len();
             continue;
@@ -380,12 +377,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             routing::fetch_routes(&new_listings, &places, api_key)
         });
 
-    let delivery = match webhook_url {
-        Some(webhook_url) if !dry_run => Delivery::Slack { webhook_url },
+    let mut delivery = match webhook_url {
+        Some(webhook_url) if !dry_run => Delivery::Slack(slack::Sender::new(webhook_url)),
         _ => Delivery::DryRun,
     };
     if let Err(error) = send_slack_listings(
-        &delivery,
+        &mut delivery,
         &new_listings,
         &new_group_ids,
         &places,
@@ -405,8 +402,8 @@ mod tests {
     use super::{Delivery, retain_max_beds, select_new, send_slack_listings};
     use crate::listing::{Listing, ListingSource};
     use crate::routing::RouteMap;
-    use crate::state;
     use crate::test_support::{listing, run_sink};
+    use crate::{slack, state};
 
     fn ids(listings: &[Listing]) -> Vec<&str> {
         listings.iter().map(|listing| listing.id.as_str()).collect()
@@ -472,7 +469,7 @@ mod tests {
         let path = directory.path().join("sent_ids.txt");
 
         let result = send_slack_listings(
-            &Delivery::Slack { webhook_url: url },
+            &mut Delivery::Slack(slack::Sender::with_sleep(url, |_| {})),
             &listings,
             &group_ids,
             &[],
@@ -498,7 +495,7 @@ mod tests {
         let path = directory.path().join("sent_ids.txt");
 
         send_slack_listings(
-            &Delivery::DryRun,
+            &mut Delivery::DryRun,
             &listings,
             &group_ids,
             &[],

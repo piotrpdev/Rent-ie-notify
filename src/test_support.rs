@@ -24,7 +24,7 @@ pub(crate) fn listing(id: &str, source: ListingSource) -> Listing {
 }
 
 /// Starts a local HTTP server that answers one request per entry in
-/// `statuses` (in order) and returns its URL plus a handle yielding the
+/// `statuses` (in order, each with `Retry-After: 0` and body `invalid_blocks`) and returns its URL plus a handle yielding the
 /// received request bodies.
 pub(crate) fn run_sink(statuses: Vec<u16>) -> Result<(String, JoinHandle<Vec<String>>), String> {
     let server = tiny_http::Server::http("127.0.0.1:0").map_err(|error| error.to_string())?;
@@ -43,9 +43,12 @@ pub(crate) fn run_sink(statuses: Vec<u16>) -> Result<(String, JoinHandle<Vec<Str
             let mut body = String::new();
             let _ = request.as_reader().read_to_string(&mut body);
             bodies.push(body);
-            let _ = request.respond(
-                tiny_http::Response::from_string("invalid_blocks").with_status_code(status),
-            );
+            let mut response =
+                tiny_http::Response::from_string("invalid_blocks").with_status_code(status);
+            if let Ok(header) = tiny_http::Header::from_bytes("Retry-After", "0") {
+                response.add_header(header);
+            }
+            let _ = request.respond(response);
         }
         bodies
     });
