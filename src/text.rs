@@ -119,27 +119,30 @@ fn listing_line(listing: &Listing) -> String {
     )
 }
 
+/// Heading prefix for listings grouped by bed configuration.
+fn kind_label(listing: &Listing) -> &'static str {
+    if listing.detail_property_type == "rooms-to-rent" {
+        "Room shares"
+    } else {
+        "Houses"
+    }
+}
+
 pub(crate) fn generate(listings: &[Listing]) -> String {
     let mut groups: BTreeMap<String, Vec<&Listing>> = BTreeMap::new();
 
     for listing in listings {
-        let (heading, is_bed_group) = bedroom_group(listing).map_or_else(
+        let heading = bedroom_group(listing).map_or_else(
             || {
                 let description = listing.description.trim();
-                let heading = if description.is_empty() {
+                if description.is_empty() {
                     "Other listings".to_string()
                 } else {
                     description.to_string()
-                };
-                (heading, false)
+                }
             },
-            |group| (group, true),
+            |beds| format!("{} with {beds}", kind_label(listing)),
         );
-        let heading = if is_bed_group {
-            format!("Houses with {heading}")
-        } else {
-            heading
-        };
         groups.entry(heading).or_default().push(listing);
     }
 
@@ -246,7 +249,21 @@ mod tests {
 
     #[test]
     fn groups_and_formats_a_report() {
+        let room_share = Listing {
+            detail_property_type: "rooms-to-rent".to_string(),
+            ..listing(
+                "4",
+                Some(1),
+                None,
+                None,
+                Some(1),
+                "€650 per month",
+                "Now",
+                "",
+            )
+        };
         let listings = vec![
+            room_share,
             listing(
                 "1",
                 Some(4),
@@ -282,6 +299,7 @@ mod tests {
         let report = generate(&listings);
 
         assert!(report.contains("Houses with 4 double beds:"));
+        assert!(report.contains("Room shares with 1 double bed:"));
         assert!(report.contains(
             "(1 bath, 2,600/month, available now, min. 1yr lease) https://example.com/1"
         ));
