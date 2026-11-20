@@ -4,7 +4,8 @@ use reqwest::blocking::Client;
 use crate::delay;
 use crate::http::{self, Page};
 use crate::listing::{
-    Listing, ListingSource, extract_image_keys, format_description, format_publish_date,
+    Listing, ListingDetails, ListingSource, extract_image_keys, format_description,
+    format_publish_date,
 };
 use crate::next_data::{self, Paging};
 
@@ -77,16 +78,6 @@ struct PropertyOverviewItem {
     text: String,
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct ListingDetails {
-    pub(crate) available_from: String,
-    pub(crate) minimum_lease: String,
-    pub(crate) single_bedrooms: Option<u32>,
-    pub(crate) double_bedrooms: Option<u32>,
-    pub(crate) twin_bedrooms: Option<u32>,
-    pub(crate) bathrooms: Option<u32>,
-}
-
 fn parse_count(text: &str) -> Option<u32> {
     text.split_whitespace().next()?.parse().ok()
 }
@@ -153,12 +144,7 @@ fn listing_from_data(listing: ListingData, section: &str) -> Listing {
         price: price.trim().to_string(),
         date: publish_date.map(format_publish_date).unwrap_or_default(),
         description: format_description([num_bedrooms, num_bathrooms, property_type]),
-        available_from: String::new(),
-        minimum_lease: String::new(),
-        single_bedrooms: None,
-        double_bedrooms: None,
-        twin_bedrooms: None,
-        bathrooms: None,
+        details: ListingDetails::default(),
         detail_property_type: section.to_string(),
     }
 }
@@ -334,14 +320,7 @@ pub(crate) fn add_listing_details(listings: &mut [Listing], build_id: &str) {
 
     for (index, listing) in listings.iter_mut().enumerate() {
         match fetch_details(&client, build_id, listing) {
-            Ok(details) => {
-                listing.available_from = details.available_from;
-                listing.minimum_lease = details.minimum_lease;
-                listing.single_bedrooms = details.single_bedrooms;
-                listing.double_bedrooms = details.double_bedrooms;
-                listing.twin_bedrooms = details.twin_bedrooms;
-                listing.bathrooms = details.bathrooms;
-            }
+            Ok(details) => listing.details = details,
             Err(error) => eprintln!(
                 "Failed to fetch property details for {}: {error}",
                 listing.id

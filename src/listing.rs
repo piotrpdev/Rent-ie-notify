@@ -27,13 +27,19 @@ pub(crate) struct Listing {
     pub(crate) price: String,
     pub(crate) date: String,
     pub(crate) description: String,
+    pub(crate) details: ListingDetails,
+    pub(crate) detail_property_type: String,
+}
+
+/// Fields from the rent.ie property-detail endpoint; empty until fetched.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ListingDetails {
     pub(crate) available_from: String,
     pub(crate) minimum_lease: String,
     pub(crate) single_bedrooms: Option<u32>,
     pub(crate) double_bedrooms: Option<u32>,
     pub(crate) twin_bedrooms: Option<u32>,
     pub(crate) bathrooms: Option<u32>,
-    pub(crate) detail_property_type: String,
 }
 
 #[derive(Debug, DeJson)]

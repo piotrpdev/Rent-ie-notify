@@ -98,11 +98,15 @@ impl WebhookPayload {
                     listing.link, listing.address, listing.description, listing.price, listing.date
                 );
 
-                if !listing.available_from.is_empty() {
-                    let _ = write!(text, "\n*Available from:* {}", listing.available_from);
+                if !listing.details.available_from.is_empty() {
+                    let _ = write!(
+                        text,
+                        "\n*Available from:* {}",
+                        listing.details.available_from
+                    );
                 }
-                if !listing.minimum_lease.is_empty() {
-                    let _ = write!(text, "\n*Minimum lease:* {}", listing.minimum_lease);
+                if !listing.details.minimum_lease.is_empty() {
+                    let _ = write!(text, "\n*Minimum lease:* {}", listing.details.minimum_lease);
                 }
                 text.push_str(&distance_line(listing, places, routes));
 
@@ -153,7 +157,7 @@ pub(crate) fn listings_to_slack_message_json(
 #[cfg(test)]
 mod tests {
     use super::listings_to_slack_message_json;
-    use crate::listing::{Coordinates, Listing, ListingSource};
+    use crate::listing::{Coordinates, Listing, ListingDetails, ListingSource};
     use crate::places::Place;
     use crate::routing::{RouteMap, RouteMeasurement};
 
@@ -173,12 +177,11 @@ mod tests {
             price: "€500 per month".to_string(),
             date: "14th of November, 2026".to_string(),
             description: "House".to_string(),
-            available_from: "Now".to_string(),
-            minimum_lease: "1 Year".to_string(),
-            single_bedrooms: None,
-            double_bedrooms: None,
-            twin_bedrooms: None,
-            bathrooms: None,
+            details: ListingDetails {
+                available_from: "Now".to_string(),
+                minimum_lease: "1 Year".to_string(),
+                ..ListingDetails::default()
+            },
             detail_property_type: "houses-to-let".to_string(),
         };
         let places = vec![Place {
@@ -210,12 +213,11 @@ mod tests {
             price: "€500 per month".to_string(),
             date: "14th of November, 2026".to_string(),
             description: "House".to_string(),
-            available_from: "Now".to_string(),
-            minimum_lease: "1 Year".to_string(),
-            single_bedrooms: None,
-            double_bedrooms: None,
-            twin_bedrooms: None,
-            bathrooms: None,
+            details: ListingDetails {
+                available_from: "Now".to_string(),
+                minimum_lease: "1 Year".to_string(),
+                ..ListingDetails::default()
+            },
             detail_property_type: "houses-to-let".to_string(),
         };
         let places = vec![Place {

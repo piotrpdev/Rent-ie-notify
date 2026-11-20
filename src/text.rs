@@ -17,9 +17,9 @@ fn plural(count: u32, singular: &str, plural: &str) -> String {
 }
 
 fn bedroom_group(listing: &Listing) -> Option<String> {
-    let doubles = listing.double_bedrooms.unwrap_or(0);
-    let singles = listing.single_bedrooms.unwrap_or(0);
-    let twins = listing.twin_bedrooms.unwrap_or(0);
+    let doubles = listing.details.double_bedrooms.unwrap_or(0);
+    let singles = listing.details.single_bedrooms.unwrap_or(0);
+    let twins = listing.details.twin_bedrooms.unwrap_or(0);
 
     if doubles == 0 && singles == 0 && twins == 0 {
         return None;
@@ -103,13 +103,13 @@ fn lease_text(minimum_lease: &str) -> String {
 }
 
 fn listing_line(listing: &Listing) -> String {
-    let bathrooms = listing.bathrooms.map_or_else(
+    let bathrooms = listing.details.bathrooms.map_or_else(
         || "? bath".to_string(),
         |count| plural(count, "bath", "bath"),
     );
     let price = compact_price(&listing.price);
-    let available = available_text(&listing.available_from);
-    let lease = lease_text(&listing.minimum_lease);
+    let available = available_text(&listing.details.available_from);
+    let lease = lease_text(&listing.details.minimum_lease);
 
     format!(
         "({bathrooms}, {price}, available {available}, {lease}) {}",
@@ -192,7 +192,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{filename_from_seconds, generate, write_report};
-    use crate::listing::{Listing, ListingSource};
+    use crate::listing::{Listing, ListingDetails, ListingSource};
 
     #[allow(clippy::too_many_arguments)]
     fn listing(
@@ -216,12 +216,14 @@ mod tests {
             price: price.to_string(),
             date: String::new(),
             description: "House".to_string(),
-            available_from: available_from.to_string(),
-            minimum_lease: minimum_lease.to_string(),
-            single_bedrooms,
-            double_bedrooms,
-            twin_bedrooms,
-            bathrooms,
+            details: ListingDetails {
+                available_from: available_from.to_string(),
+                minimum_lease: minimum_lease.to_string(),
+                single_bedrooms,
+                double_bedrooms,
+                twin_bedrooms,
+                bathrooms,
+            },
             detail_property_type: "houses-to-let".to_string(),
         }
     }

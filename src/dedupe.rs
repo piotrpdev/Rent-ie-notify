@@ -54,7 +54,7 @@ pub(crate) fn group_listings(mut listings: Vec<Listing>) -> Vec<Vec<Listing>> {
 #[cfg(test)]
 mod tests {
     use super::{group_listings, representative};
-    use crate::listing::{Listing, ListingSource};
+    use crate::listing::{Listing, ListingDetails, ListingSource};
     use crate::{daft_ie, rent_ie};
 
     fn listing(id: &str, image_keys: &[&str], source: ListingSource) -> Listing {
@@ -69,12 +69,7 @@ mod tests {
             price: String::new(),
             date: String::new(),
             description: String::new(),
-            available_from: String::new(),
-            minimum_lease: String::new(),
-            single_bedrooms: None,
-            double_bedrooms: None,
-            twin_bedrooms: None,
-            bathrooms: None,
+            details: ListingDetails::default(),
             detail_property_type: "houses-to-let".to_string(),
         }
     }

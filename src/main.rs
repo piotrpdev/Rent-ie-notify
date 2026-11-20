@@ -71,15 +71,6 @@ fn fetch_all_sources(
     Ok((listings, rent_build_id))
 }
 
-fn copy_detail_fields(target: &mut Listing, source: &Listing) {
-    target.available_from.clone_from(&source.available_from);
-    target.minimum_lease.clone_from(&source.minimum_lease);
-    target.single_bedrooms = source.single_bedrooms;
-    target.double_bedrooms = source.double_bedrooms;
-    target.twin_bedrooms = source.twin_bedrooms;
-    target.bathrooms = source.bathrooms;
-}
-
 fn send_slack_listings(
     webhook_url: &str,
     listings: &[Listing],
@@ -129,7 +120,7 @@ fn prepare_details_and_report(
                 .iter()
                 .find(|candidate| candidate.id == listing.id)
             {
-                copy_detail_fields(listing, source);
+                listing.details.clone_from(&source.details);
             }
         }
 
