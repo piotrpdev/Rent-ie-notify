@@ -9,7 +9,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `src/state.rs` — loads/appends (and syncs) `sent_ids.txt` (legacy ID normalization, `HashSet` lookups) and takes the per-run lock.
 - `src/http.rs` — `send_text` (send + status check + body) and `paginate` (sequential page loop with `delay::sleep()`, capped at 50 pages and stopped if the cursor doesn't advance), shared by every source.
 - `src/delay.rs` — jittered delay helper for paginated/detail requests.
-- `src/listing.rs` — shared `Listing` model (detail-endpoint fields nested in `ListingDetails`), coordinates, image-key extraction, and description/date formatting.
+- `src/listing.rs` — shared `Listing` model (detail-endpoint fields nested in `ListingDetails`), the `RawListing` search-result schema shared by all three sites (`into_listing` does the common conversion; sites supply link and detail section), coordinates, image-key extraction, and description/date formatting.
 - `src/places.rs` — parses `PLACES_OF_INTEREST`, computes haversine distances, and formats them for Slack.
 - `src/routing.rs` — batched OpenRouteService `driving-car` Matrix requests for drive time/distance, with straight-line fallback.
 - `src/text.rs` — generates the optional text report grouped by bedroom configuration.

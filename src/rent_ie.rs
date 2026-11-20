@@ -4,10 +4,7 @@ use reqwest::blocking::Client;
 
 use crate::delay;
 use crate::http::{self, Page};
-use crate::listing::{
-    Listing, ListingDetails, ListingSource, bedroom_count, extract_image_keys, format_description,
-    format_publish_date,
-};
+use crate::listing::{Listing, ListingDetails, ListingSource, SearchResult};
 use crate::next_data::{self, Paging};
 
 const RENT_IE_BASE_URL: &str = "https://www.rent.ie";
@@ -52,11 +49,6 @@ struct SearchPageProps {
 }
 
 #[derive(Debug, DeJson)]
-struct SearchResult {
-    listing: ListingData,
-}
-
-#[derive(Debug, DeJson)]
 struct PropertyData {
     #[nserde(rename = "pageProps")]
     page_props: PropertyPageProps,
@@ -81,74 +73,6 @@ struct PropertyOverviewItem {
 
 fn parse_count(text: &str) -> Option<u32> {
     text.split_whitespace().next()?.parse().ok()
-}
-
-#[derive(Debug, DeJson)]
-struct ListingData {
-    id: u64,
-    title: String,
-    price: String,
-    #[nserde(rename = "numBedrooms")]
-    num_bedrooms: Option<String>,
-    #[nserde(rename = "numBathrooms")]
-    num_bathrooms: Option<String>,
-    #[nserde(rename = "propertyType")]
-    property_type: Option<String>,
-    media: Option<ListingMedia>,
-    #[nserde(rename = "seoFriendlyPath")]
-    seo_friendly_path: String,
-    #[nserde(rename = "publishDate")]
-    publish_date: Option<u64>,
-}
-
-#[derive(Debug, DeJson)]
-struct ListingMedia {
-    #[nserde(default)]
-    images: Vec<ListingImage>,
-}
-
-#[derive(Debug, DeJson)]
-struct ListingImage {
-    #[nserde(rename = "size360x240")]
-    thumbnail: Option<String>,
-}
-
-fn listing_from_data(listing: ListingData, section: &str) -> Listing {
-    let ListingData {
-        id,
-        title,
-        price,
-        num_bedrooms,
-        num_bathrooms,
-        property_type,
-        media,
-        seo_friendly_path,
-        publish_date,
-    } = listing;
-
-    let image_urls: Vec<String> = media
-        .into_iter()
-        .flat_map(|media| media.images)
-        .filter_map(|image| image.thumbnail)
-        .collect();
-    let img_url = image_urls.first().cloned().unwrap_or_default();
-    let image_keys = extract_image_keys(&image_urls);
-
-    Listing {
-        id: id.to_string(),
-        source: ListingSource::Rent,
-        link: listing_url(section, &seo_friendly_path, id),
-        img_url,
-        image_keys,
-        coordinates: None,
-        address: title.trim().to_string(),
-        price: price.trim().to_string(),
-        date: publish_date.map_or_default(format_publish_date),
-        bedrooms: bedroom_count(num_bedrooms.as_deref()),
-        description: format_description([num_bedrooms, num_bathrooms, property_type]),
-        details: ListingDetails::default(),
-        detail_property_type: section.to_string(),
-    }
 }
 
 fn listing_url(section: &str, seo_friendly_path: &str, listing_id: u64) -> String {
@@ -260,7 +184,10 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page> {
 
     let listings = listings
         .into_iter()
-        .map(|search_result| listing_from_data(search_result.listing, &property_type))
+        .map(|SearchResult { listing }| {
+            let link = listing_url(&property_type, &listing.seo_friendly_path, listing.id());
+            listing.into_listing(ListingSource::Rent, link, &property_type)
+        })
         .collect();
 
     Ok((listings, next_page))

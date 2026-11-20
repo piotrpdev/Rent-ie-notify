@@ -3,10 +3,7 @@ use nanoserde::DeJson;
 use reqwest::blocking::Client;
 
 use crate::http::{self, Page};
-use crate::listing::{
-    Coordinates, Listing, ListingDetails, ListingSource, bedroom_count, extract_image_keys,
-    format_description, format_publish_date,
-};
+use crate::listing::{Listing, ListingSource, RawListing, SearchResult};
 
 const API_URL: &str = "https://gateway.daft.ie/api/v2/ads/listings";
 
@@ -28,83 +25,10 @@ struct Paging {
     total_results: u32,
 }
 
-#[derive(Debug, DeJson)]
-struct SearchResult {
-    listing: ListingData,
-}
-
-#[derive(Debug, DeJson)]
-struct ListingData {
-    id: u64,
-    title: String,
-    price: String,
-    #[nserde(rename = "numBedrooms")]
-    num_bedrooms: Option<String>,
-    #[nserde(rename = "numBathrooms")]
-    num_bathrooms: Option<String>,
-    #[nserde(rename = "propertyType")]
-    property_type: Option<String>,
-    #[nserde(default)]
-    sections: Vec<String>,
-    media: Option<ListingMedia>,
-    point: Option<GeoPoint>,
-    #[nserde(rename = "seoFriendlyPath")]
-    seo_friendly_path: String,
-    #[nserde(rename = "publishDate")]
-    publish_date: Option<u64>,
-}
-
-#[derive(Debug, DeJson)]
-struct GeoPoint {
-    coordinates: Vec<f64>,
-}
-
-#[derive(Debug, DeJson)]
-struct ListingMedia {
-    #[nserde(default)]
-    images: Vec<ListingImage>,
-}
-
-#[derive(Debug, DeJson)]
-struct ListingImage {
-    #[nserde(rename = "size720x480")]
-    large: Option<String>,
-    #[nserde(rename = "size72x52")]
-    small: Option<String>,
-}
-
-fn listing_from_data(listing: ListingData) -> Listing {
-    let ListingData {
-        id,
-        title,
-        price,
-        num_bedrooms,
-        num_bathrooms,
-        property_type,
-        sections,
-        media,
-        point,
-        seo_friendly_path,
-        publish_date,
-    } = listing;
-
-    let image_urls: Vec<String> = media
-        .into_iter()
-        .flat_map(|media| media.images)
-        .filter_map(|image| image.large.or(image.small))
-        .collect();
-    let img_url = image_urls.first().cloned().unwrap_or_default();
-    let image_keys = extract_image_keys(&image_urls);
-    let coordinates = point.and_then(|point| {
-        let longitude = point.coordinates.first().copied()?;
-        let latitude = point.coordinates.get(1).copied()?;
-
-        Some(Coordinates {
-            latitude,
-            longitude,
-        })
-    });
-    let detail_property_type = if sections
+fn listing_from_raw(listing: RawListing) -> Listing {
+    let link = absolute_url(&listing.seo_friendly_path);
+    let detail_property_type = if listing
+        .sections
         .iter()
         .any(|section| section.eq_ignore_ascii_case("Sharing"))
     {
@@ -113,22 +37,7 @@ fn listing_from_data(listing: ListingData) -> Listing {
         "houses-to-let"
     };
 
-    Listing {
-        // rent.ie and daft.ie share the numeric listing ID space.
-        id: id.to_string(),
-        source: ListingSource::Daft,
-        link: absolute_url(&seo_friendly_path),
-        img_url,
-        image_keys,
-        coordinates,
-        address: title.trim().to_string(),
-        price: price.trim().to_string(),
-        date: publish_date.map_or_default(format_publish_date),
-        bedrooms: bedroom_count(num_bedrooms.as_deref()),
-        description: format_description([num_bedrooms, num_bathrooms, property_type]),
-        details: ListingDetails::default(),
-        detail_property_type: detail_property_type.to_string(),
-    }
+    listing.into_listing(ListingSource::Daft, link, detail_property_type)
 }
 
 fn absolute_url(path: &str) -> String {
@@ -153,7 +62,7 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page> {
     let listings = data
         .listings
         .into_iter()
-        .map(|search_result| listing_from_data(search_result.listing))
+        .map(|SearchResult { listing }| listing_from_raw(listing))
         .collect();
 
     Ok((listings, next_from))

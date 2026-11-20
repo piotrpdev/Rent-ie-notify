@@ -48,6 +48,121 @@ pub(crate) struct ListingDetails {
     pub(crate) bathrooms: Option<u32>,
 }
 
+/// A search result entry as returned by all three sites' search APIs (they
+/// share a backend, so the listing schema is the same). Fields that only one
+/// site sends (`sections`, `point`: daft.ie) are optional.
+///
+/// nanoserde-derive panics on `pub(crate)`, so these types are `pub`.
+#[derive(Debug, DeJson)]
+pub struct SearchResult {
+    pub listing: RawListing,
+}
+
+#[derive(Debug, DeJson)]
+pub struct RawListing {
+    id: u64,
+    title: String,
+    price: String,
+    #[nserde(rename = "numBedrooms")]
+    num_bedrooms: Option<String>,
+    #[nserde(rename = "numBathrooms")]
+    num_bathrooms: Option<String>,
+    #[nserde(rename = "propertyType")]
+    property_type: Option<String>,
+    media: Option<RawMedia>,
+    #[nserde(rename = "seoFriendlyPath")]
+    pub seo_friendly_path: String,
+    #[nserde(rename = "publishDate")]
+    publish_date: Option<u64>,
+    /// daft.ie only, e.g. `["Sharing"]`.
+    #[nserde(default)]
+    pub sections: Vec<String>,
+    /// daft.ie only: coordinates in `[longitude, latitude]` order.
+    point: Option<GeoPoint>,
+}
+
+#[derive(Debug, DeJson)]
+struct GeoPoint {
+    coordinates: Vec<f64>,
+}
+
+#[derive(Debug, DeJson)]
+struct RawMedia {
+    #[nserde(default)]
+    images: Vec<RawImage>,
+}
+
+#[derive(Debug, DeJson)]
+struct RawImage {
+    #[nserde(rename = "size720x480")]
+    large: Option<String>,
+    #[nserde(rename = "size360x240")]
+    medium: Option<String>,
+    #[nserde(rename = "size72x52")]
+    small: Option<String>,
+}
+
+impl RawImage {
+    /// The image URL each site has always used: daft.ie's large (or small)
+    /// rendition, and the 360x240 thumbnail elsewhere. Image keys for
+    /// cross-site matching are decoded from these URLs.
+    fn url(self, source: ListingSource) -> Option<String> {
+        match source {
+            ListingSource::Daft => self.large.or(self.small),
+            ListingSource::Rent | ListingSource::Property => self.medium,
+        }
+    }
+}
+
+impl RawListing {
+    pub(crate) const fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Builds a [`Listing`]. `link` and `detail_property_type` are site
+    /// specific and computed by the caller.
+    pub(crate) fn into_listing(
+        self,
+        source: ListingSource,
+        link: String,
+        detail_property_type: &str,
+    ) -> Listing {
+        let image_urls: Vec<String> = self
+            .media
+            .into_iter()
+            .flat_map(|media| media.images)
+            .filter_map(|image| image.url(source))
+            .collect();
+        let coordinates = self.point.and_then(|point| {
+            Some(Coordinates {
+                longitude: point.coordinates.first().copied()?,
+                latitude: point.coordinates.get(1).copied()?,
+            })
+        });
+
+        Listing {
+            // rent.ie and daft.ie share the numeric listing ID space.
+            id: self.id.to_string(),
+            source,
+            link,
+            img_url: image_urls.first().cloned().unwrap_or_default(),
+            image_keys: extract_image_keys(&image_urls),
+            coordinates,
+            address: self.title.trim().to_string(),
+            price: self.price.trim().to_string(),
+            date: self.publish_date.map_or_default(format_publish_date),
+            bedrooms: bedroom_count(self.num_bedrooms.as_deref()),
+            description: format_description([
+                self.num_bedrooms,
+                self.num_bathrooms,
+                self.property_type,
+            ]),
+            details: ListingDetails::default(),
+            detail_property_type: detail_property_type.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, DeJson)]
 struct ImageDescriptor {
     key: Option<String>,
@@ -66,7 +181,7 @@ fn image_key(url: &str) -> Option<String> {
     ImageDescriptor::deserialize_json(&json).ok()?.key
 }
 
-pub(crate) fn extract_image_keys(urls: &[String]) -> Vec<String> {
+fn extract_image_keys(urls: &[String]) -> Vec<String> {
     let mut keys = Vec::new();
 
     for url in urls {
@@ -80,7 +195,7 @@ pub(crate) fn extract_image_keys(urls: &[String]) -> Vec<String> {
     keys
 }
 
-pub(crate) fn format_description(parts: [Option<String>; 3]) -> String {
+fn format_description(parts: [Option<String>; 3]) -> String {
     parts
         .into_iter()
         .flatten()
@@ -127,7 +242,7 @@ pub(crate) fn bedroom_count(num_bedrooms: Option<&str>) -> Option<u32> {
     num_bedrooms?.split_whitespace().next()?.parse().ok()
 }
 
-pub(crate) fn format_publish_date(timestamp_ms: u64) -> String {
+fn format_publish_date(timestamp_ms: u64) -> String {
     let days_since_epoch = i64::try_from(timestamp_ms / 86_400_000).unwrap_or_default();
     let (year, month, day) = civil_from_days(days_since_epoch);
 
