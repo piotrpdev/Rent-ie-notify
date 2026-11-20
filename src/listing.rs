@@ -2,11 +2,15 @@ use base64::{Engine as _, engine::general_purpose};
 
 use nanoserde::DeJson;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ListingSource {
     Rent,
     Daft,
     Property,
+}
+
+impl ListingSource {
+    pub(crate) const ALL: [Self; 3] = [Self::Rent, Self::Daft, Self::Property];
 }
 
 #[derive(Debug, Clone, Copy)]

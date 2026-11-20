@@ -1,13 +1,6 @@
-use crate::listing::{Listing, ListingSource};
+use std::collections::HashMap;
 
-fn are_duplicates(left: &Listing, right: &Listing) -> bool {
-    left.id == right.id
-        || (left.source != right.source
-            && left
-                .image_keys
-                .iter()
-                .any(|key| right.image_keys.contains(key)))
-}
+use crate::listing::{Listing, ListingSource};
 
 /// Prefers the daft.ie listing as the group representative, then falls back to
 /// the first listing in the group.
@@ -25,27 +18,80 @@ pub(crate) fn representative(group: &[Listing]) -> Option<Listing> {
     Some(representative)
 }
 
-pub(crate) fn group_listings(mut listings: Vec<Listing>) -> Vec<Vec<Listing>> {
-    let mut groups = Vec::new();
+/// Union-find root lookup with path compression.
+fn find(parent: &mut [usize], index: usize) -> usize {
+    let mut root = index;
+    while let Some(&next) = parent.get(root) {
+        if next == root {
+            break;
+        }
+        root = next;
+    }
 
-    while !listings.is_empty() {
-        let mut group = vec![listings.remove(0)];
-        let mut index = 0;
+    let mut current = index;
+    while let Some(slot) = parent.get_mut(current) {
+        if *slot == root {
+            break;
+        }
+        current = std::mem::replace(slot, root);
+    }
 
-        while index < listings.len() {
-            let duplicate = listings.get(index).is_some_and(|candidate| {
-                group.iter().any(|member| are_duplicates(member, candidate))
-            });
+    root
+}
 
-            if duplicate {
-                group.push(listings.remove(index));
-                index = 0;
-            } else {
-                index += 1;
+fn union(parent: &mut [usize], left: usize, right: usize) {
+    let left = find(parent, left);
+    let right = find(parent, right);
+    if let Some(slot) = parent.get_mut(left.max(right)) {
+        *slot = left.min(right);
+    }
+}
+
+/// Groups listings that share a numeric ID, or an image key across different
+/// sources (same-source image reuse is ignored so stock photos don't merge
+/// distinct ads). Matching is transitive. Groups are ordered by their first
+/// listing, and members keep their input order.
+pub(crate) fn group_listings(listings: Vec<Listing>) -> Vec<Vec<Listing>> {
+    let mut parent: Vec<usize> = (0..listings.len()).collect();
+    let mut first_by_id: HashMap<&str, usize> = HashMap::new();
+    let mut first_by_key: HashMap<(&str, ListingSource), usize> = HashMap::new();
+
+    for (index, listing) in listings.iter().enumerate() {
+        match first_by_id.get(listing.id.as_str()) {
+            Some(&other) => union(&mut parent, index, other),
+            None => {
+                first_by_id.insert(&listing.id, index);
             }
         }
 
-        groups.push(group);
+        for key in &listing.image_keys {
+            for source in ListingSource::ALL {
+                if source != listing.source
+                    && let Some(&other) = first_by_key.get(&(key.as_str(), source))
+                {
+                    union(&mut parent, index, other);
+                }
+            }
+            first_by_key
+                .entry((key.as_str(), listing.source))
+                .or_insert(index);
+        }
+    }
+
+    let roots: Vec<usize> = (0..listings.len())
+        .map(|index| find(&mut parent, index))
+        .collect();
+    let mut group_by_root: HashMap<usize, usize> = HashMap::new();
+    let mut groups: Vec<Vec<Listing>> = Vec::new();
+
+    for (listing, root) in listings.into_iter().zip(roots) {
+        let position = *group_by_root.entry(root).or_insert_with(|| {
+            groups.push(Vec::new());
+            groups.len() - 1
+        });
+        if let Some(group) = groups.get_mut(position) {
+            group.push(listing);
+        }
     }
 
     groups
@@ -128,6 +174,22 @@ mod tests {
         ]);
 
         assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn groups_same_source_id_repeats_and_keeps_input_order() {
+        let groups = group_listings(vec![
+            listing("1", &[], ListingSource::Rent),
+            listing("2", &["x"], ListingSource::Daft),
+            listing("1", &[], ListingSource::Rent),
+            listing("3", &["x"], ListingSource::Property),
+        ]);
+
+        let ids: Vec<Vec<&str>> = groups
+            .iter()
+            .map(|group| group.iter().map(|listing| listing.id.as_str()).collect())
+            .collect();
+        assert_eq!(ids, vec![vec!["1", "1"], vec!["2", "3"]]);
     }
 
     #[test]
