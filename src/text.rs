@@ -120,8 +120,8 @@ fn listing_line(listing: &Listing) -> String {
 }
 
 /// Heading prefix for listings grouped by bed configuration.
-fn kind_label(listing: &Listing) -> &'static str {
-    if listing.detail_property_type == "rooms-to-rent" {
+const fn kind_label(listing: &Listing) -> &'static str {
+    if listing.section.is_room_share() {
         "Room shares"
     } else {
         "Houses"
@@ -198,7 +198,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{filename_from_seconds, generate, write_report};
-    use crate::listing::{Listing, ListingDetails, ListingSource};
+    use crate::listing::{Listing, ListingDetails, ListingSource, Section};
     use crate::test_support;
 
     #[allow(clippy::too_many_arguments)]
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn groups_and_formats_a_report() {
         let room_share = Listing {
-            detail_property_type: "rooms-to-rent".to_string(),
+            section: Section::RoomsToRent,
             ..listing(
                 "4",
                 Some(1),

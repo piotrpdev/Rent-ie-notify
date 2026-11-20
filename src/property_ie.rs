@@ -3,7 +3,7 @@ use nanoserde::DeJson;
 use reqwest::blocking::Client;
 
 use crate::http::{self, Page};
-use crate::listing::{Listing, ListingSource, SearchResult};
+use crate::listing::{Listing, ListingSource, SearchResult, Section};
 use crate::next_data::{self, Paging};
 
 /// Public site, used for listing links.
@@ -43,12 +43,12 @@ struct SearchPageProps {
     paging: Option<Paging>,
 }
 
-/// The rent.ie detail-endpoint section for a property.ie ad type.
-fn detail_property_type(ad_type: &str) -> &'static str {
+/// The rent.ie section for a property.ie ad type.
+fn section(ad_type: &str) -> Section {
     if ad_type.contains("share") {
-        "rooms-to-rent"
+        Section::RoomsToRent
     } else {
-        "houses-to-let"
+        Section::HousesToLet
     }
 }
 
@@ -96,11 +96,7 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page> {
         .into_iter()
         .map(|SearchResult { listing }| {
             let link = listing_url(&ad_type, &listing.seo_friendly_path, listing.id());
-            listing.into_listing(
-                ListingSource::Property,
-                link,
-                detail_property_type(&ad_type),
-            )
+            listing.into_listing(ListingSource::Property, link, section(&ad_type))
         })
         .collect();
 
@@ -142,6 +138,8 @@ mod tests {
     use anyhow::{Context as _, Result, anyhow, bail};
 
     use super::{extract_page_from_json, fetch_listings, listing_url, search_api_url};
+    use crate::listing::Section;
+
     const PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html>
 <head>
@@ -193,7 +191,7 @@ mod tests {
         );
         assert_eq!(listing.price, "€1,600 per month");
         assert_eq!(listing.date, "13th of November, 2026");
-        assert_eq!(listing.detail_property_type, "houses-to-let");
+        assert_eq!(listing.section, Section::HousesToLet);
 
         Ok(())
     }

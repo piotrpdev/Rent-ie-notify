@@ -4,7 +4,7 @@ use std::thread::JoinHandle;
 
 use anyhow::{Context as _, Result, anyhow};
 
-use crate::listing::{Listing, ListingDetails, ListingSource};
+use crate::listing::{Listing, ListingDetails, ListingSource, Section};
 
 /// A listing with the given ID and source and otherwise empty fields.
 pub(crate) fn listing(id: &str, source: ListingSource) -> Listing {
@@ -21,7 +21,7 @@ pub(crate) fn listing(id: &str, source: ListingSource) -> Listing {
         description: "House".to_string(),
         bedrooms: None,
         details: ListingDetails::default(),
-        detail_property_type: "houses-to-let".to_string(),
+        section: Section::HousesToLet,
     }
 }
 

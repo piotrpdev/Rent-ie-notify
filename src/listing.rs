@@ -13,6 +13,41 @@ impl ListingSource {
     pub(crate) const ALL: [Self; 3] = [Self::Rent, Self::Daft, Self::Property];
 }
 
+/// The rent.ie section (`propertyType`) a listing belongs to. Property-detail
+/// requests for every site go through rent.ie and need it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Section {
+    HousesToLet,
+    RoomsToRent,
+    /// Any other rent.ie section name, passed through as-is.
+    Other(String),
+}
+
+impl Section {
+    /// Parses a rent.ie section slug; an empty slug means houses to let.
+    pub(crate) fn from_slug(slug: &str) -> Self {
+        match slug {
+            "" | "houses-to-let" => Self::HousesToLet,
+            "rooms-to-rent" => Self::RoomsToRent,
+            other => Self::Other(other.to_string()),
+        }
+    }
+
+    /// The rent.ie URL slug, e.g. `houses-to-let`.
+    pub(crate) fn slug(&self) -> &str {
+        match self {
+            Self::HousesToLet => "houses-to-let",
+            Self::RoomsToRent => "rooms-to-rent",
+            Self::Other(slug) => slug,
+        }
+    }
+
+    /// Whether this is a room in a shared property rather than a whole home.
+    pub(crate) const fn is_room_share(&self) -> bool {
+        matches!(self, Self::RoomsToRent)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Coordinates {
     pub(crate) latitude: f64,
@@ -34,7 +69,7 @@ pub(crate) struct Listing {
     /// Numeric bedroom count from the search API (`None` for room shares).
     pub(crate) bedrooms: Option<u32>,
     pub(crate) details: ListingDetails,
-    pub(crate) detail_property_type: String,
+    pub(crate) section: Section,
 }
 
 /// Fields from the rent.ie property-detail endpoint; empty until fetched.
@@ -119,13 +154,13 @@ impl RawListing {
         self.id
     }
 
-    /// Builds a [`Listing`]. `link` and `detail_property_type` are site
-    /// specific and computed by the caller.
+    /// Builds a [`Listing`]. `link` and `section` are site specific and
+    /// computed by the caller.
     pub(crate) fn into_listing(
         self,
         source: ListingSource,
         link: String,
-        detail_property_type: &str,
+        section: Section,
     ) -> Listing {
         let image_urls: Vec<String> = self
             .media
@@ -158,7 +193,7 @@ impl RawListing {
                 self.property_type,
             ]),
             details: ListingDetails::default(),
-            detail_property_type: detail_property_type.to_string(),
+            section,
         }
     }
 }
@@ -280,7 +315,7 @@ pub(crate) const fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bedroom_count, extract_image_keys, format_publish_date};
+    use super::{Section, bedroom_count, extract_image_keys, format_publish_date};
 
     #[test]
     fn formats_publish_date_in_utc() {
@@ -316,5 +351,15 @@ mod tests {
 
         let keys = extract_image_keys(&["https://media.example/example.jpg".to_string()]);
         assert_eq!(keys, Vec::<String>::new());
+    }
+
+    #[test]
+    fn parses_rent_ie_sections() {
+        assert_eq!(Section::from_slug("rooms-to-rent"), Section::RoomsToRent);
+        assert_eq!(Section::from_slug(""), Section::HousesToLet);
+        let other = Section::from_slug("apartments-to-let");
+        assert_eq!(other.slug(), "apartments-to-let");
+        assert!(!other.is_room_share());
+        assert!(Section::RoomsToRent.is_room_share());
     }
 }

@@ -11,7 +11,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `src/endpoints.rs` — `Endpoints`: base URLs of rent.ie/property.ie `_next/data`, the daft.ie gateway, and ORS. Production uses `Endpoints::default()`; tests point them at local `tiny_http` servers. Public listing links always use the real sites.
 - `src/http.rs` — `send_text` (send + status check + body) and `paginate` (sequential page loop with `delay::sleep()`, capped at 50 pages and stopped if the cursor doesn't advance), shared by every source.
 - `src/delay.rs` — jittered delay helper for paginated/detail requests.
-- `src/listing.rs` — shared `Listing` model (detail-endpoint fields nested in `ListingDetails`), the `RawListing` search-result schema shared by all three sites (`into_listing` does the common conversion; sites supply link and detail section), coordinates, image-key extraction, and description/date formatting.
+- `src/listing.rs` — shared `Listing` model (detail-endpoint fields nested in `ListingDetails`), the `RawListing` search-result schema shared by all three sites (`into_listing` does the common conversion; sites supply the link and rent.ie `Section` — houses-to-let, rooms-to-rent, or `Other(slug)` — used for detail requests and report headings), coordinates, image-key extraction, and description/date formatting.
 - `src/places.rs` — parses `PLACES_OF_INTEREST`, computes haversine distances, and formats them for Slack.
 - `src/routing.rs` — batched OpenRouteService `driving-car` Matrix requests for drive time/distance, with straight-line fallback.
 - `src/text.rs` — generates the optional text report grouped by bedroom configuration.

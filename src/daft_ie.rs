@@ -3,7 +3,7 @@ use nanoserde::DeJson;
 use reqwest::blocking::Client;
 
 use crate::http::{self, Page};
-use crate::listing::{Listing, ListingSource, RawListing, SearchResult};
+use crate::listing::{Listing, ListingSource, RawListing, SearchResult, Section};
 
 const DAFT_IE_BASE_URL: &str = "https://www.daft.ie";
 
@@ -25,17 +25,17 @@ struct Paging {
 
 fn listing_from_raw(listing: RawListing) -> Listing {
     let link = absolute_url(&listing.seo_friendly_path);
-    let detail_property_type = if listing
+    let section = if listing
         .sections
         .iter()
         .any(|section| section.eq_ignore_ascii_case("Sharing"))
     {
-        "rooms-to-rent"
+        Section::RoomsToRent
     } else {
-        "houses-to-let"
+        Section::HousesToLet
     };
 
-    listing.into_listing(ListingSource::Daft, link, detail_property_type)
+    listing.into_listing(ListingSource::Daft, link, section)
 }
 
 fn absolute_url(path: &str) -> String {

@@ -4,7 +4,7 @@ use reqwest::blocking::Client;
 
 use crate::delay;
 use crate::http::{self, Page};
-use crate::listing::{Listing, ListingDetails, ListingSource, SearchResult};
+use crate::listing::{Listing, ListingDetails, ListingSource, SearchResult, Section};
 use crate::next_data::{self, Paging};
 
 /// Public site, used for listing links.
@@ -133,11 +133,7 @@ pub(crate) fn property_details_url(
     let address = Some(next_data::slug_from_path(&listing.link))
         .filter(|address| !address.is_empty())
         .with_context(|| format!("Could not extract address from {}", listing.link))?;
-    let property_type = if listing.detail_property_type.is_empty() {
-        "houses-to-let"
-    } else {
-        &listing.detail_property_type
-    };
+    let property_type = listing.section.slug();
 
     Ok(format!(
         "{base_url}/_next/data/{build_id}/property.json?id={}&propertyType={property_type}&address={address}",
@@ -191,7 +187,11 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page> {
         .into_iter()
         .map(|SearchResult { listing }| {
             let link = listing_url(&property_type, &listing.seo_friendly_path, listing.id());
-            listing.into_listing(ListingSource::Rent, link, &property_type)
+            listing.into_listing(
+                ListingSource::Rent,
+                link,
+                Section::from_slug(&property_type),
+            )
         })
         .collect();
 
