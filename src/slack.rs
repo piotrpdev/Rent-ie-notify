@@ -1,46 +1,42 @@
 use std::fmt::Write as _;
 
-use nanoserde::{DeJson as Deserialize, SerJson as Serialize};
+use nanoserde::SerJson;
 
 use crate::listing::Listing;
 use crate::places::{Place, distance_km, format_distance};
 use crate::routing::{RouteMap, format_duration};
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WebhookPayload {
-    pub blocks: Vec<Block>,
+#[derive(Debug, SerJson)]
+struct WebhookPayload {
+    blocks: Vec<Block>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Block {
+#[derive(Debug, SerJson)]
+struct Block {
     #[nserde(rename = "type")]
-    pub block_type: String,
+    block_type: String,
 
-    #[nserde(default)]
-    pub text: Option<TextObject>,
+    text: Option<TextObject>,
 
-    #[nserde(default)]
-    pub accessory: Option<Accessory>,
+    accessory: Option<Accessory>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TextObject {
+#[derive(Debug, SerJson)]
+struct TextObject {
     #[nserde(rename = "type")]
-    pub text_type: String,
+    text_type: String,
 
-    pub text: String,
+    text: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Accessory {
+#[derive(Debug, SerJson)]
+struct Accessory {
     #[nserde(rename = "type")]
-    pub accessory_type: String,
+    accessory_type: String,
 
-    #[nserde(default)]
-    pub image_url: Option<String>,
+    image_url: Option<String>,
 
-    #[nserde(default)]
-    pub alt_text: Option<String>,
+    alt_text: Option<String>,
 }
 
 fn distance_line(listing: &Listing, places: &[Place], routes: &RouteMap) -> String {
