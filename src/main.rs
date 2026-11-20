@@ -151,50 +151,63 @@ fn send_slack_listings(
     Ok(())
 }
 
+/// Writes the optional text report. Empty reports are skipped, and failures
+/// are logged rather than aborting the run, because the report is optional and
+/// Slack notifications should still go out.
+fn write_report(report_dir: &str, listings: &[Listing]) {
+    if listings.is_empty() {
+        return;
+    }
+
+    match text::write_report(report_dir, listings) {
+        Ok(path) => println!("Wrote report to {path}"),
+        Err(error) => eprintln!("{error}; continuing without a report."),
+    }
+}
+
+/// Fetches property details for new listings (or for every unique listing
+/// with `TEXT_REPORT_INCLUDE_ALL`) and writes the optional text report.
 fn prepare_details_and_report(
     groups: &[Vec<Listing>],
     new_listings: &mut [Listing],
     report_dir: Option<&str>,
     include_all: bool,
     rent_build_id: Option<String>,
-) -> Result<(), String> {
-    let Some(report_dir) = report_dir else {
-        if !new_listings.is_empty() {
-            populate_listing_details(new_listings, rent_build_id);
-        }
-        return Ok(());
-    };
-
-    let report_path = if include_all {
-        let mut all_listings: Vec<Listing> = groups
-            .iter()
-            .filter_map(|group| dedupe::representative(group))
-            .collect();
-
-        populate_listing_details(&mut all_listings, rent_build_id);
-
-        for listing in new_listings.iter_mut() {
-            if let Some(source) = all_listings
+) {
+    match report_dir {
+        Some(report_dir) if include_all => {
+            let mut all_listings: Vec<Listing> = groups
                 .iter()
-                .find(|candidate| candidate.id == listing.id)
-            {
-                listing.details.clone_from(&source.details);
+                .filter_map(|group| dedupe::representative(group))
+                .collect();
+
+            populate_listing_details(&mut all_listings, rent_build_id);
+
+            for listing in new_listings.iter_mut() {
+                if let Some(source) = all_listings
+                    .iter()
+                    .find(|candidate| candidate.id == listing.id)
+                {
+                    listing.details.clone_from(&source.details);
+                }
+            }
+
+            write_report(report_dir, &all_listings);
+        }
+        report_dir => {
+            populate_listing_details(new_listings, rent_build_id);
+            if let Some(report_dir) = report_dir {
+                write_report(report_dir, new_listings);
             }
         }
-
-        text::write_report(report_dir, &all_listings)?
-    } else {
-        if !new_listings.is_empty() {
-            populate_listing_details(new_listings, rent_build_id);
-        }
-        text::write_report(report_dir, new_listings)?
-    };
-
-    println!("Wrote report to {report_path}");
-    Ok(())
+    }
 }
 
 fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<String>) {
+    if listings.is_empty() {
+        return;
+    }
+
     let details_build_id = rent_build_id.map_or_else(
         || match rent_ie::fetch_build_id() {
             Ok(build_id) => Some(build_id),
@@ -294,7 +307,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         text_report_dir.as_deref(),
         text_report_include_all,
         rent_build_id,
-    )?;
+    );
 
     if new_listings.is_empty() {
         println!("No new listings.");
