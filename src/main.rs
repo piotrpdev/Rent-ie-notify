@@ -1,8 +1,10 @@
-use anyhow::{Context as _, Result, anyhow, bail};
-use std::{collections::HashSet, env, path::Path, thread};
+use anyhow::{Result, anyhow, bail};
+use std::{collections::HashSet, path::Path, thread};
 
+use crate::config::{Config, Sources};
 use crate::listing::Listing;
 
+pub mod config;
 pub mod daft_ie;
 pub mod dedupe;
 pub mod delay;
@@ -19,7 +21,6 @@ pub mod state;
 mod test_support;
 pub mod text;
 
-const DAFT_IE_REQUEST_ENV: &str = "DAFT_IE_REQUEST";
 // Slack allows at most 50 Block Kit blocks per message. Each listing uses a
 // section plus a divider, so 20 listings is 39 blocks, leaving some headroom.
 const SLACK_LISTINGS_PER_MESSAGE: usize = 20;
@@ -55,11 +56,12 @@ fn join_source<T>(
 /// Fetches all configured sources concurrently. Pagination remains sequential
 /// within each source so we don't burst the same host with parallel requests.
 /// Fails only if every configured source failed.
-fn fetch_all_sources(
-    rent_ie_url: Option<String>,
-    daft_ie_request: Option<String>,
-    property_ie_url: Option<String>,
-) -> Result<FetchedListings> {
+fn fetch_all_sources(sources: Sources) -> Result<FetchedListings> {
+    let Sources {
+        rent_ie_url,
+        daft_ie_request,
+        property_ie_url,
+    } = sources;
     let rent_thread = rent_ie_url.map(|url| thread::spawn(move || rent_ie::fetch_listings(&url)));
     let daft_thread =
         daft_ie_request.map(|body| thread::spawn(move || daft_ie::fetch_listings(&body)));
@@ -265,58 +267,21 @@ fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<Stri
     }
 }
 
-/// Reads an environment variable, treating unset and blank values alike so an
-/// empty `Environment=RENT_IE_URL=` line disables a source instead of failing it.
-fn env_value(name: &str) -> Option<String> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn max_beds_from_env() -> Result<Option<u32>> {
-    env_value("MAX_BEDS")
-        .map(|value| value.parse::<u32>())
-        .transpose()
-        .context("Invalid MAX_BEDS value")
-}
-
-fn env_flag(name: &str) -> bool {
-    env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes"
-        )
-    })
-}
-
 fn main() -> Result<()> {
-    let dry_run = env_flag("DRY_RUN");
-    let seed_only = env_flag("SEED_SENT_IDS");
-    let webhook_url = env_value("SLACK_WEBHOOK_URL");
-    // Dry runs and seeding never post, so they don't need a webhook.
-    if webhook_url.is_none() && !dry_run && !seed_only {
-        bail!("Failed to get SLACK_WEBHOOK_URL env var");
-    }
+    let Config {
+        sources,
+        webhook_url,
+        ors_api_key,
+        text_report_dir,
+        text_report_include_all,
+        max_beds,
+        places,
+        dry_run,
+        seed_only,
+    } = Config::from_env()?;
     if dry_run {
         println!("DRY_RUN is set: Slack payloads are printed and sent_ids.txt is not updated.");
     }
-    let rent_ie_url = env_value("RENT_IE_URL");
-    let daft_ie_request = env_value(DAFT_IE_REQUEST_ENV);
-    let property_ie_url = env_value("PROPERTY_IE_URL");
-    let ors_api_key = env_value("OPENROUTESERVICE_API_KEY");
-    let text_report_dir = env_value("TEXT_REPORT_DIR");
-    let text_report_include_all = env_flag("TEXT_REPORT_INCLUDE_ALL");
-    let max_beds = max_beds_from_env()?;
-
-    if rent_ie_url.is_none() && daft_ie_request.is_none() && property_ie_url.is_none() {
-        bail!("Set RENT_IE_URL, DAFT_IE_REQUEST, and/or PROPERTY_IE_URL");
-    }
-
-    let places = match env_value(places::ENV_VAR) {
-        Some(value) => places::parse(&value)?,
-        None => Vec::new(),
-    };
 
     // Held until main returns. Dry runs never write state, so they don't lock.
     let _lock = if dry_run {
@@ -334,7 +299,7 @@ fn main() -> Result<()> {
         mut listings,
         rent_build_id,
         mut failures,
-    } = fetch_all_sources(rent_ie_url, daft_ie_request, property_ie_url)?;
+    } = fetch_all_sources(sources)?;
 
     if let Some(max_beds) = max_beds {
         retain_max_beds(&mut listings, max_beds);

@@ -4,7 +4,8 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 
 ## Layout
 
-- `src/main.rs` — orchestration: env vars, concurrent source fetching, grouping, dedupe, property details, Slack POST, state file.
+- `src/main.rs` — orchestration: concurrent source fetching, grouping, dedupe, property details, Slack POST, state file.
+- `src/config.rs` — `Config::from_env` reads and validates every environment variable up front (blank = unset; webhook required unless `DRY_RUN`/`SEED_SENT_IDS`).
 - `src/next_data.rs` — Next.js helpers shared by rent.ie and property.ie: `__NEXT_DATA__` extraction (via `tl`), `_next/data` route resolution, `Paging`, slug extraction.
 - `src/state.rs` — loads/appends (and syncs) `sent_ids.txt` (legacy ID normalization, `HashSet` lookups) and takes the per-run lock.
 - `src/http.rs` — `send_text` (send + status check + body) and `paginate` (sequential page loop with `delay::sleep()`, capped at 50 pages and stopped if the cursor doesn't advance), shared by every source.
