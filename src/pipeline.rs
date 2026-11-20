@@ -372,13 +372,14 @@ mod tests {
 
     use anyhow::{Context as _, Result, anyhow};
 
-    use super::{Delivery, fetch_all_sources, retain_max_beds, select_new, send_slack_listings};
-    use crate::config::Sources;
+    use super::{
+        Delivery, fetch_all_sources, retain_max_beds, run, select_new, send_slack_listings,
+    };
+    use crate::config::{Config, Sources};
     use crate::endpoints::Endpoints;
     use crate::listing::{Listing, ListingSource};
     use crate::routing::RouteMap;
-    use crate::test_support::run_server;
-    use crate::test_support::{listing, run_sink};
+    use crate::test_support::{listing, run_server, run_sink};
     use crate::{slack, state};
 
     fn ids(listings: &[Listing]) -> Vec<&str> {
@@ -524,5 +525,206 @@ mod tests {
         let result = fetch_all_sources(sources, &Endpoints::default());
 
         assert!(result.is_err_and(|error| error.to_string().starts_with("All sources failed")));
+    }
+
+    // End-to-end runs of `run` against local fake sites and a Slack sink.
+
+    /// rent.ie `__NEXT_DATA__` search page.
+    const RENT_SEARCH_HTML: &str = r#"<html><head><script id="__NEXT_DATA__" type="application/json">{"buildId":"build","page":"/search/[[...rest]]","query":{"propertyType":"houses-to-let","county":"waterford","rest":["waterford-city"]}}</script></head></html>"#;
+    const DETAILS_JSON: &str = r#"{"pageProps":{"listing":{"propertyOverview":[{"label":"Available From","text":"Now"}]}}}"#;
+    const DAFT_REQUEST: &str = r#"{"paging":{"from":"0","pageSize":"50"}}"#;
+
+    fn raw_listing(id: u32, path_prefix: &str) -> String {
+        format!(
+            r#"{{"listing":{{"id":{id},"title":"Listing {id}","price":"€1,000 per month","numBedrooms":"2 Bed","seoFriendlyPath":"{path_prefix}/slug-{id}/{id}"}}}}"#
+        )
+    }
+
+    fn rent_page(ids: &[u32]) -> String {
+        let listings: Vec<String> = ids.iter().map(|id| raw_listing(*id, "/share")).collect();
+        format!(
+            r#"{{"pageProps":{{"propertyType":"houses-to-let","listings":[{}]}}}}"#,
+            listings.join(",")
+        )
+    }
+
+    fn daft_page(ids: &[u32]) -> String {
+        let listings: Vec<String> = ids.iter().map(|id| raw_listing(*id, "/for-rent")).collect();
+        format!(r#"{{"listings":[{}]}}"#, listings.join(","))
+    }
+
+    fn config(sources: Sources) -> Config {
+        Config {
+            sources,
+            webhook_url: None,
+            ors_api_key: None,
+            text_report_dir: None,
+            text_report_include_all: false,
+            max_beds: None,
+            places: Vec::new(),
+            dry_run: false,
+            seed_only: false,
+        }
+    }
+
+    fn saved_ids(state_dir: &std::path::Path) -> Result<Vec<String>> {
+        let content = std::fs::read_to_string(state_dir.join(state::SENT_IDS_FILENAME))?;
+        Ok(content.lines().map(ToString::to_string).collect())
+    }
+
+    #[test]
+    fn runs_end_to_end_and_skips_already_sent_listings() -> Result<()> {
+        // rent.ie lists 10 and 11; daft.ie lists 11 (same ad) and 12.
+        // Three groups, so three detail requests on the rent.ie server.
+        let (rent, rent_server) = run_server(vec![
+            (200, RENT_SEARCH_HTML.to_string()),
+            (200, rent_page(&[10, 11])),
+            (200, DETAILS_JSON.to_string()),
+            (200, DETAILS_JSON.to_string()),
+            (200, DETAILS_JSON.to_string()),
+        ])?;
+        let (daft, daft_server) = run_server(vec![(200, daft_page(&[11, 12]))])?;
+        let (webhook, sink) = run_sink(vec![200])?;
+        let endpoints = Endpoints {
+            rent_ie: rent.clone(),
+            daft_ie_api: daft,
+            ..Endpoints::default()
+        };
+        let sources = || Sources {
+            rent_ie_url: Some(format!("{rent}/search")),
+            daft_ie_request: Some(DAFT_REQUEST.to_string()),
+            property_ie_url: None,
+        };
+        let state_dir = tempfile::tempdir()?;
+
+        run(
+            Config {
+                webhook_url: Some(webhook),
+                ..config(sources())
+            },
+            &endpoints,
+            state_dir.path(),
+        )?;
+
+        let messages = sink.join().map_err(|_| anyhow!("sink panicked"))?;
+        assert_eq!(messages.len(), 1);
+        let message = messages.first().context("expected a Slack message")?;
+        assert_eq!(message.matches(r#""type":"section""#).count(), 3);
+        assert!(message.contains("*Available from:* Now"));
+        // The daft.ie copy represents the shared listing.
+        assert!(message.contains("https://www.daft.ie/for-rent/slug-11/11"));
+        assert_eq!(saved_ids(state_dir.path())?, vec!["10", "11", "12"]);
+        assert_eq!(
+            rent_server
+                .join()
+                .map_err(|_| anyhow!("server panicked"))?
+                .len(),
+            5
+        );
+        daft_server.join().map_err(|_| anyhow!("server panicked"))?;
+
+        // A second run finds nothing new: no details, no Slack message (the
+        // closed sink would make any post fail the run).
+        let (rent, _rent_server) = run_server(vec![
+            (200, RENT_SEARCH_HTML.to_string()),
+            (200, rent_page(&[10, 11])),
+        ])?;
+        let (daft, _daft_server) = run_server(vec![(200, daft_page(&[11, 12]))])?;
+        let (webhook, _sink) = run_sink(Vec::new())?;
+        let endpoints = Endpoints {
+            rent_ie: rent.clone(),
+            daft_ie_api: daft,
+            ..Endpoints::default()
+        };
+        run(
+            Config {
+                webhook_url: Some(webhook),
+                ..config(Sources {
+                    rent_ie_url: Some(format!("{rent}/search")),
+                    ..sources()
+                })
+            },
+            &endpoints,
+            state_dir.path(),
+        )?;
+        assert_eq!(saved_ids(state_dir.path())?.len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn seeding_records_ids_without_posting() -> Result<()> {
+        let (daft, server) = run_server(vec![(200, daft_page(&[1, 2]))])?;
+        let endpoints = Endpoints {
+            daft_ie_api: daft,
+            ..Endpoints::default()
+        };
+        let state_dir = tempfile::tempdir()?;
+
+        run(
+            Config {
+                seed_only: true,
+                ..config(Sources {
+                    daft_ie_request: Some(DAFT_REQUEST.to_string()),
+                    ..Sources::default()
+                })
+            },
+            &endpoints,
+            state_dir.path(),
+        )?;
+
+        assert_eq!(saved_ids(state_dir.path())?, vec!["1", "2"]);
+        assert_eq!(
+            server.join().map_err(|_| anyhow!("server panicked"))?.len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dry_run_writes_no_state_and_takes_no_lock() -> Result<()> {
+        let (daft, _server) = run_server(vec![(200, daft_page(&[1]))])?;
+        // The rent.ie endpoint is dead, so the detail lookup fails (logged).
+        let endpoints = Endpoints {
+            daft_ie_api: daft,
+            rent_ie: "http://127.0.0.1:1".to_string(),
+            ..Endpoints::default()
+        };
+        let state_dir = tempfile::tempdir()?;
+
+        run(
+            Config {
+                dry_run: true,
+                ..config(Sources {
+                    daft_ie_request: Some(DAFT_REQUEST.to_string()),
+                    ..Sources::default()
+                })
+            },
+            &endpoints,
+            state_dir.path(),
+        )?;
+
+        assert_eq!(std::fs::read_dir(state_dir.path())?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_to_run_while_another_run_holds_the_lock() -> Result<()> {
+        let state_dir = tempfile::tempdir()?;
+        let _held = state::lock(&state_dir.path().join(state::LOCK_FILENAME))?;
+
+        let result = run(
+            Config {
+                webhook_url: Some("http://127.0.0.1:1/".to_string()),
+                ..config(Sources {
+                    rent_ie_url: Some(DEAD_URL.to_string()),
+                    ..Sources::default()
+                })
+            },
+            &Endpoints::default(),
+            state_dir.path(),
+        );
+
+        assert!(result.is_err_and(|error| error.to_string().contains("in progress")));
+        Ok(())
     }
 }
