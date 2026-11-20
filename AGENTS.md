@@ -36,7 +36,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 
 ## Gotchas
 
-- `sent_ids.txt` is gitignored runtime state, read/written relative to the current directory. Running elsewhere moves the state. A missing file treats every fetched listing as new; deleting it re-sends everything.
+- `sent_ids.txt` is gitignored runtime state, read/written relative to the current directory. Running elsewhere moves the state. A missing file treats every fetched listing as new; deleting it re-sends everything. Any other read error (permissions, invalid UTF-8, a directory) aborts the run before fetching.
 - There is no dry-run or argument parsing: any `cargo run` with valid env vars hits the configured APIs, Slack, and appends IDs. Use a throwaway webhook for end-to-end checks.
 - Slack's HTTP status is not checked; a transport-level success is enough to mark listings as sent, so a rejected payload can be lost silently. New groups are sent in chunks of 20 listings to stay under Slack's Block Kit limit; empty runs are skipped.
 - rent.ie listing data comes from `/_next/data/<buildId>/search/<rest>.json?...`. The `buildId` changes on deployments and isn't available from a stable endpoint, so the configured search page is still fetched once per run to read it from `<script id="__NEXT_DATA__">`.

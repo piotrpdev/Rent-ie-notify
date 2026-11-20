@@ -1,6 +1,11 @@
 //! `sent_ids.txt`: the IDs of every listing already posted to Slack.
 
-use std::{collections::HashSet, fs::OpenOptions, io::Write, path::Path};
+use std::{
+    collections::HashSet,
+    fs::OpenOptions,
+    io::{ErrorKind, Write},
+    path::Path,
+};
 
 pub(crate) const SENT_IDS_FILENAME: &str = "sent_ids.txt";
 
@@ -16,18 +21,21 @@ fn parse(content: &str) -> HashSet<String> {
         .collect()
 }
 
-/// Loads previously sent IDs. A missing file means nothing has been sent yet.
-pub(crate) fn load(path: &Path) -> HashSet<String> {
-    std::fs::read_to_string(path).map_or_else(
-        |_| {
+/// Loads previously sent IDs. A missing file means nothing has been sent yet;
+/// any other read error is returned, because treating an unreadable file as
+/// empty would re-send every listing.
+pub(crate) fn load(path: &Path) -> Result<HashSet<String>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(parse(&content)),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
             eprintln!(
                 "{} not found, assuming no listings have been sent yet.",
                 path.display()
             );
-            HashSet::new()
-        },
-        |content| parse(&content),
-    )
+            Ok(HashSet::new())
+        }
+        Err(error) => Err(format!("Failed to read {}: {error}", path.display())),
+    }
 }
 
 /// Appends `ids`, one per line, creating the file if needed.
@@ -68,13 +76,28 @@ mod tests {
             tempfile::tempdir().map_err(|error| format!("failed to create temp dir: {error}"))?;
         let path = directory.path().join("sent_ids.txt");
 
-        assert!(load(&path).is_empty());
+        assert!(load(&path)?.is_empty());
         append(&path, &["1".to_string(), "2".to_string()])?;
         append(&path, &["3".to_string()])?;
 
-        let ids = load(&path);
+        let ids = load(&path)?;
         assert_eq!(ids.len(), 3);
         assert!(ids.contains("3"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn fails_on_unreadable_state_instead_of_starting_fresh() -> Result<(), String> {
+        let directory =
+            tempfile::tempdir().map_err(|error| format!("failed to create temp dir: {error}"))?;
+        // A directory in place of the file is unreadable but exists.
+        assert!(load(directory.path()).is_err());
+
+        let path = directory.path().join("sent_ids.txt");
+        std::fs::write(&path, [0xff, 0xfe])
+            .map_err(|error| format!("failed to write fixture: {error}"))?;
+        assert!(load(&path).is_err());
 
         Ok(())
     }

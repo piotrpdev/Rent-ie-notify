@@ -238,6 +238,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => Vec::new(),
     };
 
+    // Load state before fetching so an unreadable file fails fast.
+    println!("Loading already sent listing IDs from file...");
+    let sent_ids_path = Path::new(state::SENT_IDS_FILENAME);
+    let sent_ids = state::load(sent_ids_path)?;
+
     let FetchedListings {
         mut listings,
         rent_build_id,
@@ -254,10 +259,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Grouped {listing_count} listings into {} unique listings.",
         groups.len()
     );
-
-    println!("Loading already sent listing IDs from file...");
-    let sent_ids_path = Path::new(state::SENT_IDS_FILENAME);
-    let sent_ids = state::load(sent_ids_path);
 
     let new_groups: Vec<Vec<Listing>> = groups
         .iter()
