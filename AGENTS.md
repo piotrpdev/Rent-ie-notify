@@ -29,7 +29,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`/`PROPERTY_IE_URL`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.
 - Build: `cargo build --release` → `target/release/Rent-ie-notify`.
 - Run from the repo root with `SLACK_WEBHOOK_URL` and at least one of `RENT_IE_URL`, `DAFT_IE_REQUEST`, or `PROPERTY_IE_URL` set. Optional `PLACES_OF_INTEREST` adds distance lines; optional `OPENROUTESERVICE_API_KEY` enables driving times/distances; optional `TEXT_REPORT_DIR` writes grouped timestamped text reports; optional `MAX_BEDS` caps bedrooms across all sources.
-- CI pins Rust 1.92.0 (workflow); locally installed toolchains may be newer, so avoid APIs newer than that.
+- Rust 1.92.0 is pinned by `rust-toolchain.toml` (rustup installs it automatically) and by the workflows; `Cargo.toml` sets `rust-version = "1.92"` so newer clippy releases (`cargo +stable clippy`) don't suggest APIs that 1.92 lacks. `clippy::question_mark` is allowed because nanoserde's derive output trips it on clippy 1.92.
 
 ## Gotchas
 
