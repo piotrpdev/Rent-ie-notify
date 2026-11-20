@@ -271,15 +271,16 @@ fn env_flag(name: &str) -> bool {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let delivery = if env_flag("DRY_RUN") {
+    let dry_run = env_flag("DRY_RUN");
+    let seed_only = env_flag("SEED_SENT_IDS");
+    let webhook_url = env_value("SLACK_WEBHOOK_URL");
+    // Dry runs and seeding never post, so they don't need a webhook.
+    if webhook_url.is_none() && !dry_run && !seed_only {
+        return Err("Failed to get SLACK_WEBHOOK_URL env var".into());
+    }
+    if dry_run {
         println!("DRY_RUN is set: Slack payloads are printed and sent_ids.txt is not updated.");
-        Delivery::DryRun
-    } else {
-        Delivery::Slack {
-            webhook_url: env_value("SLACK_WEBHOOK_URL")
-                .ok_or("Failed to get SLACK_WEBHOOK_URL env var")?,
-        }
-    };
+    }
     let rent_ie_url = env_value("RENT_IE_URL");
     let daft_ie_request = env_value(DAFT_IE_REQUEST_ENV);
     let property_ie_url = env_value("PROPERTY_IE_URL");
@@ -330,6 +331,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .unzip();
 
+    if seed_only {
+        let ids = unique_ids(new_group_ids.iter().flatten());
+        if dry_run {
+            println!("DRY_RUN: would seed {} listing IDs.", ids.len());
+        } else {
+            println!(
+                "SEED_SENT_IDS is set: recording {} listing IDs without posting...",
+                ids.len()
+            );
+            state::append(sent_ids_path, &ids)?;
+        }
+        return finish(&failures);
+    }
+
     prepare_details_and_report(
         &groups,
         &mut new_listings,
@@ -349,6 +364,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             routing::fetch_routes(&new_listings, &places, api_key)
         });
 
+    let delivery = match webhook_url {
+        Some(webhook_url) if !dry_run => Delivery::Slack { webhook_url },
+        _ => Delivery::DryRun,
+    };
     if let Err(error) = send_slack_listings(
         &delivery,
         &new_listings,
