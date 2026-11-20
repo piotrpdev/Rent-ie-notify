@@ -1,5 +1,6 @@
 /target
 sent_ids.txt
+sent_ids.txt.lock
 opencode.json
 reports/
 

@@ -2,12 +2,42 @@
 
 use std::{
     collections::HashSet,
-    fs::OpenOptions,
+    fs::{File, OpenOptions, TryLockError},
     io::{ErrorKind, Write},
     path::Path,
 };
 
 pub(crate) const SENT_IDS_FILENAME: &str = "sent_ids.txt";
+pub(crate) const LOCK_FILENAME: &str = "sent_ids.txt.lock";
+
+/// Exclusive lock held for a whole run, so two runs in the same directory
+/// can't both read the same state and post the same listings. Released when
+/// dropped or when the process exits.
+#[derive(Debug)]
+pub(crate) struct RunLock {
+    _file: File,
+}
+
+/// Takes the run lock at `path`, failing immediately if another run holds it.
+pub(crate) fn lock(path: &Path) -> Result<RunLock, String> {
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|error| format!("Failed to open {}: {error}", path.display()))?;
+
+    match file.try_lock() {
+        Ok(()) => Ok(RunLock { _file: file }),
+        Err(TryLockError::WouldBlock) => Err(format!(
+            "Another run is in progress ({} is locked)",
+            path.display()
+        )),
+        Err(TryLockError::Error(error)) => {
+            Err(format!("Failed to lock {}: {error}", path.display()))
+        }
+    }
+}
 
 fn parse(content: &str) -> HashSet<String> {
     // Older versions stored "<slug>/<id>" and later versions stored daft IDs as
@@ -62,7 +92,7 @@ pub(crate) fn append(path: &Path, ids: &[String]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{append, load, parse};
+    use super::{append, load, lock, parse};
 
     #[test]
     fn parses_legacy_and_current_listing_ids() {
@@ -102,6 +132,20 @@ mod tests {
         std::fs::write(&path, [0xff, 0xfe])
             .map_err(|error| format!("failed to write fixture: {error}"))?;
         assert!(load(&path).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn allows_only_one_run_lock_at_a_time() -> Result<(), String> {
+        let directory =
+            tempfile::tempdir().map_err(|error| format!("failed to create temp dir: {error}"))?;
+        let path = directory.path().join("sent_ids.txt.lock");
+
+        let first = lock(&path)?;
+        assert!(lock(&path).is_err_and(|error| error.contains("in progress")));
+        drop(first);
+        lock(&path)?;
 
         Ok(())
     }

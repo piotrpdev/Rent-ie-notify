@@ -320,6 +320,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => Vec::new(),
     };
 
+    // Held until main returns. Dry runs never write state, so they don't lock.
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(state::lock(Path::new(state::LOCK_FILENAME))?)
+    };
+
     // Load state before fetching so an unreadable file fails fast.
     println!("Loading already sent listing IDs from file...");
     let sent_ids_path = Path::new(state::SENT_IDS_FILENAME);

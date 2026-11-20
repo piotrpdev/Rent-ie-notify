@@ -6,7 +6,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 
 - `src/main.rs` — orchestration: env vars, concurrent source fetching, grouping, dedupe, property details, Slack POST, state file.
 - `src/next_data.rs` — Next.js helpers shared by rent.ie and property.ie: `__NEXT_DATA__` extraction (via `tl`), `_next/data` route resolution, `Paging`, slug extraction.
-- `src/state.rs` — loads/appends `sent_ids.txt` (legacy ID normalization, `HashSet` lookups).
+- `src/state.rs` — loads/appends (and syncs) `sent_ids.txt` (legacy ID normalization, `HashSet` lookups) and takes the per-run lock.
 - `src/http.rs` — `send_text` (send + status check + body) and `paginate` (sequential page loop with `delay::sleep()`, capped at 50 pages and stopped if the cursor doesn't advance), shared by every source.
 - `src/delay.rs` — jittered delay helper for paginated/detail requests.
 - `src/listing.rs` — shared `Listing` model (detail-endpoint fields nested in `ListingDetails`), coordinates, image-key extraction, and description/date formatting.
@@ -39,7 +39,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 
 ## Gotchas
 
-- `sent_ids.txt` is gitignored runtime state, read/written relative to the current directory. Running elsewhere moves the state. A missing file treats every fetched listing as new; deleting it re-sends everything. Any other read error (permissions, invalid UTF-8, a directory) aborts the run before fetching.
+- `sent_ids.txt` is gitignored runtime state, read/written relative to the current directory. Running elsewhere moves the state. A missing file treats every fetched listing as new; deleting it re-sends everything. Any other read error (permissions, invalid UTF-8, a directory) aborts the run before fetching. Non-dry runs hold an exclusive lock on `sent_ids.txt.lock` (gitignored, `File::try_lock`) for the whole run; a second concurrent run in the same directory exits immediately.
 - There is no argument parsing. Without `DRY_RUN=1`, any `cargo run` with valid env vars hits the configured APIs, Slack, and appends IDs. `DRY_RUN=1` still fetches listings/details (and ORS if keyed) and writes reports, but prints the Slack payloads instead of posting and never writes `sent_ids.txt`; `SLACK_WEBHOOK_URL` is not required. `SEED_SENT_IDS=1` records every currently unsent group's IDs without posting (no details, reports, or Slack) to avoid a flood on first run or after losing the state file; combined with `DRY_RUN=1` it only prints the count.
 - Slack messages carry 20 listings each (Block Kit allows 50 blocks). Each message's group IDs are appended to `sent_ids.txt` only after Slack returns 2xx, so a failure neither loses nor re-sends other messages. Messages are spaced ~1.1 s apart (Slack webhooks allow ~1/s); a 429 is waited out using `Retry-After` (capped at 60 s, up to 3 retries) before counting as a failure. A rejected (non-429) message is retried once without image accessories (Slack rejects the whole message if an image can't be downloaded); if still rejected, it is skipped, retried next run, and the run exits non-zero. Empty runs are skipped.
 - rent.ie listing data comes from `/_next/data/<buildId>/search/<rest>.json?...`. The `buildId` changes on deployments and isn't available from a stable endpoint, so the configured search page is still fetched once per run to read it from `<script id="__NEXT_DATA__">`.
