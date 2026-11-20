@@ -1,0 +1,528 @@
+//! One run of the notifier, from fetching sources to recording what was sent.
+
+use std::{collections::HashSet, path::Path, thread};
+
+use anyhow::{Result, anyhow, bail};
+
+use crate::config::{Config, Sources};
+use crate::endpoints::Endpoints;
+use crate::listing::Listing;
+use crate::{daft_ie, dedupe, places, property_ie, rent_ie, routing, slack, state, text};
+
+// Slack allows at most 50 Block Kit blocks per message. Each listing uses a
+// section plus a divider, so 20 listings is 39 blocks, leaving some headroom.
+const SLACK_LISTINGS_PER_MESSAGE: usize = 20;
+
+struct FetchedListings {
+    listings: Vec<Listing>,
+    rent_build_id: Option<String>,
+    /// One message per configured source that failed.
+    failures: Vec<String>,
+}
+
+/// Joins a source's fetch thread, recording (and logging) a failure instead of
+/// propagating it so the other sources can still be processed.
+fn join_source<T>(
+    name: &str,
+    handle: Option<thread::JoinHandle<Result<T>>>,
+    failures: &mut Vec<String>,
+) -> Option<T> {
+    let result = handle?
+        .join()
+        .unwrap_or_else(|_| Err(anyhow!("fetch thread panicked")));
+
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            eprintln!("{name} failed, continuing with the other sources: {error:#}");
+            failures.push(format!("{name}: {error:#}"));
+            None
+        }
+    }
+}
+
+/// Fetches all configured sources concurrently. Pagination remains sequential
+/// within each source so we don't burst the same host with parallel requests.
+/// Fails only if every configured source failed.
+fn fetch_all_sources(sources: Sources, endpoints: &Endpoints) -> Result<FetchedListings> {
+    let Sources {
+        rent_ie_url,
+        daft_ie_request,
+        property_ie_url,
+    } = sources;
+    let rent_base = endpoints.rent_ie.clone();
+    let rent_thread =
+        rent_ie_url.map(|url| thread::spawn(move || rent_ie::fetch_listings(&rent_base, &url)));
+    let daft_api = endpoints.daft_ie_api.clone();
+    let daft_thread = daft_ie_request
+        .map(|body| thread::spawn(move || daft_ie::fetch_listings(&daft_api, &body)));
+    let property_base = endpoints.property_ie.clone();
+    let property_thread = property_ie_url
+        .map(|url| thread::spawn(move || property_ie::fetch_listings(&property_base, &url)));
+    let configured = [
+        rent_thread.is_some(),
+        daft_thread.is_some(),
+        property_thread.is_some(),
+    ]
+    .into_iter()
+    .filter(|configured| *configured)
+    .count();
+
+    let mut failures = Vec::new();
+    let rent = join_source("rent.ie", rent_thread, &mut failures);
+    let daft = join_source("daft.ie", daft_thread, &mut failures);
+    let property = join_source("property.ie", property_thread, &mut failures);
+
+    if failures.len() == configured {
+        bail!("All sources failed: {}", failures.join("; "));
+    }
+
+    let (mut listings, rent_build_id) = rent.map_or_else(
+        || (Vec::new(), None),
+        |(listings, build_id)| (listings, Some(build_id)),
+    );
+    listings.extend(daft.unwrap_or_default());
+    listings.extend(property.unwrap_or_default());
+
+    Ok(FetchedListings {
+        listings,
+        rent_build_id,
+        failures,
+    })
+}
+
+/// Turns failures that were tolerated during the run (failed sources, Slack
+/// rejections) into a non-zero exit, so systemd/journald still flag the run.
+fn finish(failures: &[String]) -> Result<()> {
+    if failures.is_empty() {
+        println!("Done.");
+        Ok(())
+    } else {
+        bail!("Run finished with errors: {}", failures.join("; "))
+    }
+}
+
+/// Returns each ID once, keeping first-seen order.
+fn unique_ids<'a>(ids: impl IntoIterator<Item = &'a String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    ids.into_iter()
+        .filter(|id| seen.insert(id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Drops listings with more than `max_beds` bedrooms. Listings without a
+/// numeric count (room shares) are kept.
+fn retain_max_beds(listings: &mut Vec<Listing>, max_beds: u32) {
+    listings.retain(|listing| listing.bedrooms.is_none_or(|bedrooms| bedrooms <= max_beds));
+}
+
+/// Returns the representative of each group with no already-sent ID, alongside
+/// every ID in that group (all of which are recorded once it is sent).
+fn select_new(
+    groups: &[Vec<Listing>],
+    sent_ids: &HashSet<String>,
+) -> (Vec<Listing>, Vec<Vec<String>>) {
+    groups
+        .iter()
+        .filter(|group| !group.iter().any(|listing| sent_ids.contains(&listing.id)))
+        .filter_map(|group| {
+            let ids = group.iter().map(|listing| listing.id.clone()).collect();
+            Some((dedupe::representative(group)?, ids))
+        })
+        .unzip()
+}
+
+/// Where new listings go.
+enum Delivery {
+    Slack(slack::Sender),
+    /// `DRY_RUN=1`: print the Slack payloads and leave `sent_ids.txt` alone.
+    DryRun,
+}
+
+/// Posts new listings to Slack in chunks and appends each chunk's group IDs to
+/// the state file as soon as Slack accepts it, so a later failure neither loses
+/// nor re-sends earlier chunks. Rejected chunks are skipped (and retried next
+/// run); failing to record state aborts immediately to avoid duplicates.
+fn send_slack_listings(
+    delivery: &mut Delivery,
+    listings: &[Listing],
+    group_ids: &[Vec<String>],
+    places: &[places::Place],
+    routes: &routing::RouteMap,
+    sent_ids_path: &Path,
+) -> Result<()> {
+    let mut rejected = 0;
+
+    for (chunk, chunk_ids) in listings
+        .chunks(SLACK_LISTINGS_PER_MESSAGE)
+        .zip(group_ids.chunks(SLACK_LISTINGS_PER_MESSAGE))
+    {
+        let sender = match delivery {
+            Delivery::Slack(sender) => sender,
+            Delivery::DryRun => {
+                println!(
+                    "DRY_RUN: would send {} listings to Slack:\n{}",
+                    chunk.len(),
+                    slack::listings_to_slack_message_json(chunk, places, routes, true)
+                );
+                continue;
+            }
+        };
+
+        println!("Sending {} new listings to Slack...", chunk.len());
+        if let Err(error) = sender.send(chunk, places, routes) {
+            eprintln!("{error:#}");
+            rejected += chunk.len();
+            continue;
+        }
+
+        state::append(sent_ids_path, &unique_ids(chunk_ids.iter().flatten()))?;
+    }
+
+    if rejected > 0 {
+        bail!("Slack did not accept {rejected} listings; they will be retried next run");
+    }
+    Ok(())
+}
+
+/// Writes the optional text report. Empty reports are skipped, and failures
+/// are logged rather than aborting the run, because the report is optional and
+/// Slack notifications should still go out.
+fn write_report(report_dir: &str, listings: &[Listing]) {
+    if listings.is_empty() {
+        return;
+    }
+
+    match text::write_report(report_dir, listings) {
+        Ok(path) => println!("Wrote report to {path}"),
+        Err(error) => eprintln!("{error:#}; continuing without a report."),
+    }
+}
+
+/// Fetches property details for new listings (or for every unique listing
+/// with `TEXT_REPORT_INCLUDE_ALL`) and writes the optional text report.
+fn prepare_details_and_report(
+    endpoints: &Endpoints,
+    groups: &[Vec<Listing>],
+    new_listings: &mut [Listing],
+    report_dir: Option<&str>,
+    include_all: bool,
+    rent_build_id: Option<String>,
+) {
+    match report_dir {
+        Some(report_dir) if include_all => {
+            let mut all_listings: Vec<Listing> = groups
+                .iter()
+                .filter_map(|group| dedupe::representative(group))
+                .collect();
+
+            populate_listing_details(endpoints, &mut all_listings, rent_build_id);
+
+            for listing in new_listings.iter_mut() {
+                if let Some(source) = all_listings
+                    .iter()
+                    .find(|candidate| candidate.id == listing.id)
+                {
+                    listing.details.clone_from(&source.details);
+                }
+            }
+
+            write_report(report_dir, &all_listings);
+        }
+        report_dir => {
+            populate_listing_details(endpoints, new_listings, rent_build_id);
+            if let Some(report_dir) = report_dir {
+                write_report(report_dir, new_listings);
+            }
+        }
+    }
+}
+
+fn populate_listing_details(
+    endpoints: &Endpoints,
+    listings: &mut [Listing],
+    rent_build_id: Option<String>,
+) {
+    if listings.is_empty() {
+        return;
+    }
+
+    let details_build_id = rent_build_id.map_or_else(
+        || match rent_ie::fetch_build_id(&endpoints.rent_ie) {
+            Ok(build_id) => Some(build_id),
+            Err(error) => {
+                eprintln!("Failed to fetch rent.ie build ID for property details: {error:#}");
+                None
+            }
+        },
+        Some,
+    );
+
+    if let Some(build_id) = details_build_id {
+        rent_ie::add_listing_details(&endpoints.rent_ie, listings, &build_id);
+    }
+}
+
+/// Runs one check: fetch, group, filter already-sent listings, fetch details,
+/// write the report, post to Slack, and record what was sent. State files
+/// (`sent_ids.txt`, its lock) live in `state_dir`.
+pub(crate) fn run(config: Config, endpoints: &Endpoints, state_dir: &Path) -> Result<()> {
+    let Config {
+        sources,
+        webhook_url,
+        ors_api_key,
+        text_report_dir,
+        text_report_include_all,
+        max_beds,
+        places,
+        dry_run,
+        seed_only,
+    } = config;
+    if dry_run {
+        println!("DRY_RUN is set: Slack payloads are printed and sent_ids.txt is not updated.");
+    }
+
+    // Held until main returns. Dry runs never write state, so they don't lock.
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(state::lock(&state_dir.join(state::LOCK_FILENAME))?)
+    };
+
+    // Load state before fetching so an unreadable file fails fast.
+    println!("Loading already sent listing IDs from file...");
+    let sent_ids_path = state_dir.join(state::SENT_IDS_FILENAME);
+    let sent_ids = state::load(&sent_ids_path)?;
+
+    let FetchedListings {
+        mut listings,
+        rent_build_id,
+        mut failures,
+    } = fetch_all_sources(sources, endpoints)?;
+
+    if let Some(max_beds) = max_beds {
+        retain_max_beds(&mut listings, max_beds);
+    }
+
+    let listing_count = listings.len();
+    let groups = dedupe::group_listings(listings);
+    println!(
+        "Grouped {listing_count} listings into {} unique listings.",
+        groups.len()
+    );
+
+    let (mut new_listings, new_group_ids) = select_new(&groups, &sent_ids);
+
+    if seed_only {
+        let ids = unique_ids(new_group_ids.iter().flatten());
+        if dry_run {
+            println!("DRY_RUN: would seed {} listing IDs.", ids.len());
+        } else {
+            println!(
+                "SEED_SENT_IDS is set: recording {} listing IDs without posting...",
+                ids.len()
+            );
+            state::append(&sent_ids_path, &ids)?;
+        }
+        return finish(&failures);
+    }
+
+    prepare_details_and_report(
+        endpoints,
+        &groups,
+        &mut new_listings,
+        text_report_dir.as_deref(),
+        text_report_include_all,
+        rent_build_id,
+    );
+
+    if new_listings.is_empty() {
+        println!("No new listings.");
+        return finish(&failures);
+    }
+
+    let routes = ors_api_key
+        .as_deref()
+        .map_or_else(routing::RouteMap::new, |api_key| {
+            routing::fetch_routes(&endpoints.ors_matrix, &new_listings, &places, api_key)
+        });
+
+    let mut delivery = match webhook_url {
+        Some(webhook_url) if !dry_run => Delivery::Slack(slack::Sender::new(webhook_url)),
+        _ => Delivery::DryRun,
+    };
+    if let Err(error) = send_slack_listings(
+        &mut delivery,
+        &new_listings,
+        &new_group_ids,
+        &places,
+        &routes,
+        &sent_ids_path,
+    ) {
+        failures.push(format!("{error:#}"));
+    }
+
+    finish(&failures)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use anyhow::{Context as _, Result, anyhow};
+
+    use super::{Delivery, fetch_all_sources, retain_max_beds, select_new, send_slack_listings};
+    use crate::config::Sources;
+    use crate::endpoints::Endpoints;
+    use crate::listing::{Listing, ListingSource};
+    use crate::routing::RouteMap;
+    use crate::test_support::run_server;
+    use crate::test_support::{listing, run_sink};
+    use crate::{slack, state};
+
+    fn ids(listings: &[Listing]) -> Vec<&str> {
+        listings.iter().map(|listing| listing.id.as_str()).collect()
+    }
+
+    #[test]
+    fn max_beds_keeps_room_shares() {
+        let mut listings = vec![
+            Listing {
+                bedrooms: Some(2),
+                ..listing("1", ListingSource::Rent)
+            },
+            Listing {
+                bedrooms: Some(5),
+                ..listing("2", ListingSource::Rent)
+            },
+            listing("3", ListingSource::Rent),
+        ];
+
+        retain_max_beds(&mut listings, 4);
+
+        assert_eq!(ids(&listings), vec!["1", "3"]);
+    }
+
+    #[test]
+    fn selects_unsent_groups_with_all_their_ids() {
+        let groups = vec![
+            vec![
+                listing("1", ListingSource::Rent),
+                listing("2", ListingSource::Daft),
+            ],
+            vec![
+                listing("3", ListingSource::Rent),
+                listing("4", ListingSource::Property),
+            ],
+            vec![listing("5", ListingSource::Property)],
+        ];
+        let sent_ids: HashSet<String> = HashSet::from(["4".to_string()]);
+
+        let (new_listings, group_ids) = select_new(&groups, &sent_ids);
+
+        assert_eq!(ids(&new_listings), vec!["2", "5"]);
+        assert_eq!(group_ids, vec![vec!["1", "2"], vec!["5"]]);
+    }
+
+    fn numbered(count: usize) -> (Vec<Listing>, Vec<Vec<String>>) {
+        (1..=count)
+            .map(|index| {
+                let id = index.to_string();
+                (listing(&id, ListingSource::Daft), vec![id.clone(), id])
+            })
+            .unzip()
+    }
+
+    #[test]
+    fn records_ids_only_for_messages_slack_accepts() -> Result<()> {
+        // 45 listings -> messages of 20, 20, 5. The second message is rejected
+        // (no images, so no retry); the others are accepted.
+        let (listings, group_ids) = numbered(45);
+        let (url, sink) = run_sink(vec![200, 400, 200])?;
+        let directory = tempfile::tempdir().context("failed to create temp dir")?;
+        let path = directory.path().join("sent_ids.txt");
+
+        let result = send_slack_listings(
+            &mut Delivery::Slack(slack::Sender::with_sleep(url, |_| {})),
+            &listings,
+            &group_ids,
+            &[],
+            &RouteMap::new(),
+            &path,
+        );
+
+        assert!(result.is_err_and(|error| error.to_string().contains("20 listings")));
+        assert_eq!(sink.join().map_err(|_| anyhow!("sink panicked"))?.len(), 3);
+        let content = std::fs::read_to_string(&path)?;
+        let saved: Vec<&str> = content.lines().collect();
+        let expected: Vec<String> = (1..=20).chain(41..=45).map(|id| id.to_string()).collect();
+        assert_eq!(saved, expected);
+        assert_eq!(state::load(&path)?.len(), 25);
+        Ok(())
+    }
+
+    #[test]
+    fn dry_run_posts_nothing_and_writes_no_state() -> Result<()> {
+        let (listings, group_ids) = numbered(3);
+        let directory = tempfile::tempdir().context("failed to create temp dir")?;
+        let path = directory.path().join("sent_ids.txt");
+
+        send_slack_listings(
+            &mut Delivery::DryRun,
+            &listings,
+            &group_ids,
+            &[],
+            &RouteMap::new(),
+            &path,
+        )?;
+
+        assert!(!path.exists());
+        Ok(())
+    }
+
+    /// Nothing listens on port 1, so requests there fail immediately.
+    const DEAD_URL: &str = "http://127.0.0.1:1/search";
+
+    #[test]
+    fn keeps_going_when_one_source_fails() -> Result<()> {
+        let daft_page = r#"{"listings":[{"listing":{"id":7,"title":"Listing 7","price":"€1","seoFriendlyPath":"/for-rent/slug/7"}}]}"#;
+        let (daft_api, server) = run_server(vec![(200, daft_page.to_string())])?;
+        let endpoints = Endpoints {
+            daft_ie_api: daft_api,
+            ..Endpoints::default()
+        };
+        let sources = Sources {
+            rent_ie_url: Some(DEAD_URL.to_string()),
+            daft_ie_request: Some(r#"{"paging":{"from":"0"}}"#.to_string()),
+            property_ie_url: None,
+        };
+
+        let fetched = fetch_all_sources(sources, &endpoints)?;
+
+        assert_eq!(ids(&fetched.listings), vec!["7"]);
+        assert!(fetched.rent_build_id.is_none());
+        assert_eq!(fetched.failures.len(), 1);
+        assert!(
+            fetched
+                .failures
+                .iter()
+                .all(|failure| failure.starts_with("rent.ie: "))
+        );
+        server.join().map_err(|_| anyhow!("server panicked"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn fails_when_every_source_fails() {
+        let sources = Sources {
+            rent_ie_url: Some(DEAD_URL.to_string()),
+            property_ie_url: Some(DEAD_URL.to_string()),
+            ..Sources::default()
+        };
+
+        let result = fetch_all_sources(sources, &Endpoints::default());
+
+        assert!(result.is_err_and(|error| error.to_string().starts_with("All sources failed")));
+    }
+}

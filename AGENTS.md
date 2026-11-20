@@ -4,7 +4,8 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 
 ## Layout
 
-- `src/main.rs` — orchestration: concurrent source fetching, grouping, dedupe, property details, Slack POST, state file.
+- `src/main.rs` — module list and `main`, which calls `pipeline::run` with the env config, default endpoints, and the working directory for state.
+- `src/pipeline.rs` — one run: concurrent source fetching, `MAX_BEDS`, grouping, selecting unsent groups, seeding, property details/report, routing, Slack delivery, and per-message state recording.
 - `src/config.rs` — `Config::from_env` reads and validates every environment variable up front (blank = unset; webhook required unless `DRY_RUN`/`SEED_SENT_IDS`).
 - `src/next_data.rs` — Next.js helpers shared by rent.ie and property.ie: `__NEXT_DATA__` extraction (via `tl`), `_next/data` route resolution, `Paging`, slug extraction.
 - `src/state.rs` — loads/appends (and syncs) `sent_ids.txt` (legacy ID normalization, `HashSet` lookups) and takes the per-run lock.
