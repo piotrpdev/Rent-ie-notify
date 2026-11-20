@@ -122,7 +122,7 @@ fn listing_from_data(listing: ListingData) -> Listing {
         coordinates,
         address: title.trim().to_string(),
         price: price.trim().to_string(),
-        date: publish_date.map(format_publish_date).unwrap_or_default(),
+        date: publish_date.map_or_default(format_publish_date),
         bedrooms: bedroom_count(num_bedrooms.as_deref()),
         description: format_description([num_bedrooms, num_bathrooms, property_type]),
         details: ListingDetails::default(),

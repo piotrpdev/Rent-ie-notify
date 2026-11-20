@@ -10,8 +10,7 @@ const MAX_JITTER_MILLIS: u64 = 500;
 pub(crate) fn sleep() {
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| u64::from(duration.subsec_nanos()))
-        .unwrap_or_default();
+        .map_or_default(|duration| u64::from(duration.subsec_nanos()));
     let jitter = Duration::from_millis(seed % (MAX_JITTER_MILLIS + 1));
 
     thread::sleep(BASE_DELAY + jitter);

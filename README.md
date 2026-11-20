@@ -42,7 +42,7 @@ Build the release binary on the Pi:
 sudo apt update
 sudo apt install -y build-essential cmake pkg-config curl
 
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92.0
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.100.0
 source "$HOME/.cargo/env"
 
 cd ~/Rent-ie-notify
