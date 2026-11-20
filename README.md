@@ -14,6 +14,7 @@ Optional:
 - `PLACES_OF_INTEREST` — JSON array of `{"name","latitude","longitude"}` places for distance lines.
 - `OPENROUTESERVICE_API_KEY` — enables OpenRouteService driving time/distance (`driving-car`) with straight-line fallback.
 - `TEXT_REPORT_DIR` — optional directory for timestamped grouped text reports of new listings. Set `TEXT_REPORT_INCLUDE_ALL=1` to include every unique listing in the current search instead.
+- `DRY_RUN=1` — print the Slack payloads instead of posting them and leave `sent_ids.txt` untouched (`SLACK_WEBHOOK_URL` not required).
 
 ## Testing
 

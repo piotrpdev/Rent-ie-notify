@@ -114,12 +114,21 @@ fn unique_ids<'a>(ids: impl IntoIterator<Item = &'a String>) -> Vec<String> {
         .collect()
 }
 
+/// Where new listings go.
+enum Delivery {
+    Slack {
+        webhook_url: String,
+    },
+    /// `DRY_RUN=1`: print the Slack payloads and leave `sent_ids.txt` alone.
+    DryRun,
+}
+
 /// Posts new listings to Slack in chunks and appends each chunk's group IDs to
 /// the state file as soon as Slack accepts it, so a later failure neither loses
 /// nor re-sends earlier chunks. Rejected chunks are skipped (and retried next
 /// run); failing to record state aborts immediately to avoid duplicates.
 fn send_slack_listings(
-    webhook_url: &str,
+    delivery: &Delivery,
     listings: &[Listing],
     group_ids: &[Vec<String>],
     places: &[places::Place],
@@ -133,6 +142,18 @@ fn send_slack_listings(
         .chunks(SLACK_LISTINGS_PER_MESSAGE)
         .zip(group_ids.chunks(SLACK_LISTINGS_PER_MESSAGE))
     {
+        let webhook_url = match delivery {
+            Delivery::Slack { webhook_url } => webhook_url,
+            Delivery::DryRun => {
+                println!(
+                    "DRY_RUN: would send {} listings to Slack:\n{}",
+                    chunk.len(),
+                    slack::listings_to_slack_message_json(chunk, places, routes, true)
+                );
+                continue;
+            }
+        };
+
         println!("Sending {} new listings to Slack...", chunk.len());
         if let Err(error) = slack::send(&client, webhook_url, chunk, places, routes) {
             eprintln!("{error}");
@@ -250,8 +271,15 @@ fn env_flag(name: &str) -> bool {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let slack_webhook_url =
-        env_value("SLACK_WEBHOOK_URL").ok_or("Failed to get SLACK_WEBHOOK_URL env var")?;
+    let delivery = if env_flag("DRY_RUN") {
+        println!("DRY_RUN is set: Slack payloads are printed and sent_ids.txt is not updated.");
+        Delivery::DryRun
+    } else {
+        Delivery::Slack {
+            webhook_url: env_value("SLACK_WEBHOOK_URL")
+                .ok_or("Failed to get SLACK_WEBHOOK_URL env var")?,
+        }
+    };
     let rent_ie_url = env_value("RENT_IE_URL");
     let daft_ie_request = env_value(DAFT_IE_REQUEST_ENV);
     let property_ie_url = env_value("PROPERTY_IE_URL");
@@ -322,7 +350,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
     if let Err(error) = send_slack_listings(
-        &slack_webhook_url,
+        &delivery,
         &new_listings,
         &new_group_ids,
         &places,
