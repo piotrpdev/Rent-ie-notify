@@ -49,7 +49,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - property.ie has no working max-bed URL filter (`beds_4-5` redirects to `beds_4`). `MAX_BEDS` is applied after fetching, using `Listing::bedrooms`, parsed from the API `numBedrooms` value; room-share listings without a numeric count are retained.
 - All search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`.
 - For each new group representative, `rent_ie::property_details_url`/`extract_details_from_json` fetch `propertyOverview` from the rent.ie property endpoint (it works for daft.ie and property.ie IDs too). Missing values omit the `Available from`/`Minimum lease` lines; individual detail failures are logged and do not fail the run.
-- All configured sources are fetched concurrently on separate threads. Pagination and property-detail requests stay sequential and call `delay::sleep()` (1 second plus up to 500 ms of jitter) between requests to avoid rate limiting/bot detection.
+- All configured sources are fetched concurrently on separate threads. A failing source is logged and skipped; the run continues with the others (safe because a late-arriving duplicate groups with the already-sent listing) and exits non-zero at the end. The run aborts only if every configured source fails. Pagination and property-detail requests stay sequential and call `delay::sleep()` (1 second plus up to 500 ms of jitter) between requests to avoid rate limiting/bot detection.
 - Search API `publishDate` is epoch milliseconds and is converted to a UTC human-readable date such as `14th of November, 2026`.
 - `PLACES_OF_INTEREST` is an optional JSON array:
   `[{"name":"Work","latitude":52.244898,"longitude":-7.159315}]`.

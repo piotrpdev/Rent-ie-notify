@@ -21,42 +21,88 @@ const DAFT_IE_REQUEST_ENV: &str = "DAFT_IE_REQUEST";
 // section plus a divider, so 20 listings is 39 blocks, leaving some headroom.
 const SLACK_LISTINGS_PER_MESSAGE: usize = 20;
 
+struct FetchedListings {
+    listings: Vec<Listing>,
+    rent_build_id: Option<String>,
+    /// One message per configured source that failed.
+    failures: Vec<String>,
+}
+
+/// Joins a source's fetch thread, recording (and logging) a failure instead of
+/// propagating it so the other sources can still be processed.
+fn join_source<T>(
+    name: &str,
+    handle: Option<thread::JoinHandle<Result<T, String>>>,
+    failures: &mut Vec<String>,
+) -> Option<T> {
+    let result = handle?
+        .join()
+        .unwrap_or_else(|_| Err("fetch thread panicked".to_string()));
+
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            eprintln!("{name} failed, continuing with the other sources: {error}");
+            failures.push(format!("{name}: {error}"));
+            None
+        }
+    }
+}
+
+/// Fetches all configured sources concurrently. Pagination remains sequential
+/// within each source so we don't burst the same host with parallel requests.
+/// Fails only if every configured source failed.
 fn fetch_all_sources(
     rent_ie_url: Option<String>,
     daft_ie_request: Option<String>,
     property_ie_url: Option<String>,
-) -> Result<(Vec<Listing>, Option<String>), String> {
+) -> Result<FetchedListings, String> {
     let rent_thread = rent_ie_url.map(|url| thread::spawn(move || rent_ie::fetch_listings(&url)));
     let daft_thread =
         daft_ie_request.map(|body| thread::spawn(move || daft_ie::fetch_listings(&body)));
     let property_thread =
         property_ie_url.map(|url| thread::spawn(move || property_ie::fetch_listings(&url)));
+    let configured = [
+        rent_thread.is_some(),
+        daft_thread.is_some(),
+        property_thread.is_some(),
+    ]
+    .into_iter()
+    .filter(|configured| *configured)
+    .count();
 
-    let rent_result: Result<(Vec<Listing>, Option<String>), String> = match rent_thread {
-        Some(handle) => handle
-            .join()
-            .map_err(|_| "rent.ie fetch thread panicked".to_string())?
-            .map(|(listings, build_id)| (listings, Some(build_id))),
-        None => Ok((Vec::new(), None)),
-    };
-    let daft_result = match daft_thread {
-        Some(handle) => handle
-            .join()
-            .map_err(|_| "daft.ie fetch thread panicked".to_string())?,
-        None => Ok(Vec::new()),
-    };
-    let property_result = match property_thread {
-        Some(handle) => handle
-            .join()
-            .map_err(|_| "property.ie fetch thread panicked".to_string())?,
-        None => Ok(Vec::new()),
-    };
+    let mut failures = Vec::new();
+    let rent = join_source("rent.ie", rent_thread, &mut failures);
+    let daft = join_source("daft.ie", daft_thread, &mut failures);
+    let property = join_source("property.ie", property_thread, &mut failures);
 
-    let (mut listings, rent_build_id) = rent_result?;
-    listings.extend(daft_result?);
-    listings.extend(property_result?);
+    if failures.len() == configured {
+        return Err(format!("All sources failed: {}", failures.join("; ")));
+    }
 
-    Ok((listings, rent_build_id))
+    let (mut listings, rent_build_id) = rent.map_or_else(
+        || (Vec::new(), None),
+        |(listings, build_id)| (listings, Some(build_id)),
+    );
+    listings.extend(daft.unwrap_or_default());
+    listings.extend(property.unwrap_or_default());
+
+    Ok(FetchedListings {
+        listings,
+        rent_build_id,
+        failures,
+    })
+}
+
+/// Turns source failures that were tolerated during the run into a non-zero
+/// exit, so systemd/journald still flag the run as failed.
+fn finish(failures: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if failures.is_empty() {
+        println!("Done.");
+        Ok(())
+    } else {
+        Err(format!("Some sources failed: {}", failures.join("; ")).into())
+    }
 }
 
 fn send_slack_listings(
@@ -186,10 +232,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => Vec::new(),
     };
 
-    // Fetch configured sources concurrently. Pagination remains sequential
-    // within each source so we don't burst the same host with parallel requests.
-    let (mut listings, rent_build_id) =
-        fetch_all_sources(rent_ie_url, daft_ie_request, property_ie_url)?;
+    let FetchedListings {
+        mut listings,
+        rent_build_id,
+        failures,
+    } = fetch_all_sources(rent_ie_url, daft_ie_request, property_ie_url)?;
 
     if let Some(max_beds) = max_beds {
         listings.retain(|listing| listing.bedrooms.is_none_or(|bedrooms| bedrooms <= max_beds));
@@ -226,8 +273,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if new_listings.is_empty() {
         println!("No new listings.");
-        println!("Done.");
-        return Ok(());
+        return finish(&failures);
     }
 
     let routes = ors_api_key
@@ -249,6 +295,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Saving sent listing IDs to {}...", state::SENT_IDS_FILENAME);
     state::append(sent_ids_path, &new_ids)?;
 
-    println!("Done.");
-    Ok(())
+    finish(&failures)
 }
