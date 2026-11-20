@@ -1,6 +1,6 @@
+use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 
-use anyhow::{Context as _, Result};
 use nanoserde::{DeJson, SerJson};
 use reqwest::blocking::Client;
 
@@ -9,7 +9,6 @@ use crate::http;
 use crate::listing::{Coordinates, Listing};
 use crate::places::Place;
 
-const ORS_MATRIX_URL: &str = "https://api.openrouteservice.org/v2/matrix/driving-car";
 const MAX_MATRIX_LOCATIONS: usize = 50;
 const MAX_ORIGINS_PER_BATCH: usize = 40;
 
@@ -40,6 +39,7 @@ type Origin<'a> = (&'a str, Coordinates);
 
 fn fetch_batch(
     client: &Client,
+    matrix_url: &str,
     origins: &[Origin<'_>],
     places: &[Place],
     api_key: &str,
@@ -59,7 +59,7 @@ fn fetch_batch(
 
     let json = http::send_text(
         client
-            .post(ORS_MATRIX_URL)
+            .post(matrix_url)
             .header("Authorization", api_key)
             .header("Content-Type", "application/json")
             .body(request.serialize_json()),
@@ -95,7 +95,12 @@ fn fetch_batch(
 /// Fetches drive times/distances for new listings. Any batch failure is logged
 /// and left absent from the map, so the Slack layer can fall back to straight-line
 /// distances instead of failing the whole run.
-pub(crate) fn fetch_routes(listings: &[Listing], places: &[Place], api_key: &str) -> RouteMap {
+pub(crate) fn fetch_routes(
+    matrix_url: &str,
+    listings: &[Listing],
+    places: &[Place],
+    api_key: &str,
+) -> RouteMap {
     let mut routes = RouteMap::new();
 
     if places.is_empty() || api_key.trim().is_empty() {
@@ -118,7 +123,7 @@ pub(crate) fn fetch_routes(listings: &[Listing], places: &[Place], api_key: &str
     let batch_count = origins.len().div_ceil(max_origins);
 
     for (batch_index, batch) in origins.chunks(max_origins).enumerate() {
-        match fetch_batch(&client, batch, places, api_key) {
+        match fetch_batch(&client, matrix_url, batch, places, api_key) {
             Ok(batch_routes) => routes.extend(batch_routes),
             Err(error) => eprintln!(
                 "Failed to fetch drive times from OpenRouteService: {error:#}; using straight-line fallback for this batch."
@@ -158,12 +163,74 @@ pub(crate) fn format_duration(seconds: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_duration;
+    use anyhow::{Result, anyhow};
+
+    use super::{fetch_routes, format_duration};
+    use crate::listing::{Coordinates, Listing, ListingSource};
+    use crate::places::Place;
+    use crate::test_support::{listing, run_server};
+
+    fn inputs() -> (Vec<Listing>, Vec<Place>) {
+        let with_coordinates = Listing {
+            coordinates: Some(Coordinates {
+                latitude: 52.25,
+                longitude: -7.11,
+            }),
+            ..listing("1", ListingSource::Daft)
+        };
+        let places = vec![Place {
+            name: "Work".to_string(),
+            latitude: 52.24,
+            longitude: -7.15,
+        }];
+        (
+            vec![with_coordinates, listing("2", ListingSource::Rent)],
+            places,
+        )
+    }
 
     #[test]
     fn formats_drive_durations() {
         assert_eq!(format_duration(30.0), "<1 min");
         assert_eq!(format_duration(90.0), "2 min");
         assert_eq!(format_duration(3900.0), "1 h 5 min");
+    }
+
+    #[test]
+    fn fetches_drive_times_for_listings_with_coordinates() -> Result<()> {
+        let (url, server) = run_server(vec![(
+            200,
+            r#"{"durations":[[480.0]],"distances":[[2400.0]]}"#.to_string(),
+        )])?;
+        let (listings, places) = inputs();
+
+        let routes = fetch_routes(&format!("{url}/matrix"), &listings, &places, "key");
+
+        let measurement = routes
+            .get("1")
+            .and_then(|row| row.first().copied().flatten())
+            .ok_or_else(|| anyhow!("expected a route for listing 1"))?;
+        assert!((measurement.duration_seconds - 480.0).abs() < f64::EPSILON);
+        assert!(!routes.contains_key("2"));
+
+        let requests = server.join().map_err(|_| anyhow!("server panicked"))?;
+        let request = requests
+            .first()
+            .ok_or_else(|| anyhow!("expected a request"))?;
+        assert_eq!(request.header("Authorization"), Some("key"));
+        assert!(request.body.contains(r#""sources":[0],"destinations":[1]"#));
+        Ok(())
+    }
+
+    #[test]
+    fn returns_no_routes_when_the_api_fails() -> Result<()> {
+        let (url, server) = run_server(vec![(500, String::new())])?;
+        let (listings, places) = inputs();
+
+        let routes = fetch_routes(&format!("{url}/matrix"), &listings, &places, "key");
+
+        assert!(routes.is_empty());
+        server.join().map_err(|_| anyhow!("server panicked"))?;
+        Ok(())
     }
 }

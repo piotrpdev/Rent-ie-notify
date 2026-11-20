@@ -25,35 +25,79 @@ pub(crate) fn listing(id: &str, source: ListingSource) -> Listing {
     }
 }
 
+/// A request received by [`run_server`].
+#[derive(Debug)]
+pub(crate) struct Recorded {
+    /// Path and query, e.g. `/_next/data/x/search.json?page=2`.
+    pub(crate) url: String,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: String,
+}
+
+impl Recorded {
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
 /// Starts a local HTTP server that answers one request per entry in
-/// `statuses` (in order, each with `Retry-After: 0` and body `invalid_blocks`) and returns its URL plus a handle yielding the
-/// received request bodies.
-pub(crate) fn run_sink(statuses: Vec<u16>) -> Result<(String, JoinHandle<Vec<String>>)> {
+/// `responses` (status and body, in order, each with `Retry-After: 0`) and
+/// returns its base URL (no trailing slash) plus a handle yielding the
+/// received requests.
+pub(crate) fn run_server(
+    responses: Vec<(u16, String)>,
+) -> Result<(String, JoinHandle<Vec<Recorded>>)> {
     let server = tiny_http::Server::http("127.0.0.1:0").map_err(|error| anyhow!("{error}"))?;
     let port = server
         .server_addr()
         .to_ip()
         .map(|address| address.port())
-        .context("sink has no IP address")?;
+        .context("server has no IP address")?;
 
     let handle = std::thread::spawn(move || {
-        let mut bodies = Vec::new();
-        for status in statuses {
+        let mut received = Vec::new();
+        for (status, body) in responses {
             let Ok(mut request) = server.recv() else {
                 break;
             };
-            let mut body = String::new();
-            let _ = request.as_reader().read_to_string(&mut body);
-            bodies.push(body);
-            let mut response =
-                tiny_http::Response::from_string("invalid_blocks").with_status_code(status);
+            let mut request_body = String::new();
+            let _ = request.as_reader().read_to_string(&mut request_body);
+            received.push(Recorded {
+                url: request.url().to_string(),
+                headers: request
+                    .headers()
+                    .iter()
+                    .map(|header| (header.field.to_string(), header.value.to_string()))
+                    .collect(),
+                body: request_body,
+            });
+            let mut response = tiny_http::Response::from_string(body).with_status_code(status);
             if let Ok(header) = tiny_http::Header::from_bytes("Retry-After", "0") {
                 response.add_header(header);
             }
             let _ = request.respond(response);
         }
-        bodies
+        received
     });
 
-    Ok((format!("http://127.0.0.1:{port}/"), handle))
+    Ok((format!("http://127.0.0.1:{port}"), handle))
+}
+
+/// A Slack-like sink: answers one request per status in `statuses` with body
+/// `invalid_blocks` and returns its URL plus a handle yielding the bodies.
+pub(crate) fn run_sink(statuses: Vec<u16>) -> Result<(String, JoinHandle<Vec<String>>)> {
+    let responses = statuses
+        .into_iter()
+        .map(|status| (status, "invalid_blocks".to_string()))
+        .collect();
+    let (url, handle) = run_server(responses)?;
+    let bodies = std::thread::spawn(move || {
+        handle
+            .join()
+            .map_or_default(|received| received.into_iter().map(|request| request.body).collect())
+    });
+    Ok((format!("{url}/"), bodies))
 }

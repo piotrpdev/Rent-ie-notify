@@ -6,6 +6,7 @@ use crate::http::{self, Page};
 use crate::listing::{Listing, ListingSource, SearchResult};
 use crate::next_data::{self, Paging};
 
+/// Public site, used for listing links.
 const PROPERTY_IE_BASE_URL: &str = "https://www.property.ie";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36";
@@ -63,12 +64,12 @@ fn parse_next_page_data(html: &str) -> Result<NextPageData> {
     NextPageData::deserialize_json(&json).context("Failed to parse __NEXT_DATA__ JSON")
 }
 
-pub(crate) fn search_api_url(html: &str) -> Result<String> {
+pub(crate) fn search_api_url(base_url: &str, html: &str) -> Result<String> {
     let page_data = parse_next_page_data(html)?;
     let route = next_data::data_route(&page_data.page, &page_data.query.rest);
 
     let mut url = format!(
-        "{PROPERTY_IE_BASE_URL}/_next/data/{}/{route}.json?adType={}&county={}",
+        "{base_url}/_next/data/{}/{route}.json?adType={}&county={}",
         page_data.build_id, page_data.query.ad_type, page_data.query.county
     );
 
@@ -107,7 +108,7 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page> {
 }
 
 /// Fetches every results page for a property.ie search URL.
-pub(crate) fn fetch_listings(search_url: &str) -> Result<Vec<Listing>> {
+pub(crate) fn fetch_listings(base_url: &str, search_url: &str) -> Result<Vec<Listing>> {
     // property.ie requires HTTP/2; Cloudflare returns 403 for HTTP/1.1 requests.
     let client = Client::builder()
         .user_agent(USER_AGENT)
@@ -124,7 +125,7 @@ pub(crate) fn fetch_listings(search_url: &str) -> Result<Vec<Listing>> {
         .header("accept-language", "en-GB,en-US;q=0.9,en;q=0.8")
         .header("referer", "https://www.property.ie/");
     let html = http::send_text(request, "property.ie search page")?;
-    let api_url = search_api_url(&html)?;
+    let api_url = search_api_url(base_url, &html)?;
 
     http::paginate(|page| {
         let page_url =
@@ -138,8 +139,9 @@ pub(crate) fn fetch_listings(search_url: &str) -> Result<Vec<Listing>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_page_from_json, listing_url, search_api_url};
-    use anyhow::{Context as _, Result, bail};
+    use anyhow::{Context as _, Result, anyhow, bail};
+
+    use super::{extract_page_from_json, fetch_listings, listing_url, search_api_url};
     const PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html>
 <head>
@@ -153,7 +155,7 @@ mod tests {
     #[test]
     fn builds_the_property_ie_search_api_url() -> Result<()> {
         assert_eq!(
-            search_api_url(PAGE_HTML)?,
+            search_api_url("https://www.property.ie", PAGE_HTML)?,
             "https://www.property.ie/_next/data/test-build/search/price_0-3500/beds_4.json?adType=property-to-let&county=waterford&rest=price_0-3500&rest=beds_4"
         );
         Ok(())
@@ -230,6 +232,24 @@ mod tests {
         assert_eq!(details.available_from, "");
         assert_eq!(details.bathrooms, None);
 
+        Ok(())
+    }
+
+    #[test]
+    fn fetches_the_search_page_then_the_api() -> Result<()> {
+        let page = SEARCH_JSON.replace(r#""totalPages":2"#, r#""totalPages":1"#);
+        let (base, server) =
+            crate::test_support::run_server(vec![(200, PAGE_HTML.to_string()), (200, page)])?;
+
+        let listings = fetch_listings(&base, &format!("{base}/property-to-let/waterford/"))?;
+
+        assert_eq!(listings.len(), 1);
+        let requests = server.join().map_err(|_| anyhow!("server panicked"))?;
+        assert!(requests.get(1).is_some_and(|request| {
+            request
+                .url
+                .starts_with("/_next/data/test-build/search/price_0-3500/beds_4.json?")
+        }));
         Ok(())
     }
 }

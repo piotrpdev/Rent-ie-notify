@@ -93,8 +93,9 @@ pub(crate) fn append(path: &Path, ids: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{append, load, lock, parse};
     use anyhow::{Context as _, Result};
+
+    use super::{append, load, lock, parse};
     #[test]
     fn parses_legacy_and_current_listing_ids() {
         let ids = parse("2-Belvedere-Drive-Waterford/6010625\n6721798\ndaft-6710820\n\n");

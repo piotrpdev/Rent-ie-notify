@@ -86,8 +86,9 @@ fn paginate_with(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PAGES, paginate_with};
     use anyhow::Result;
+
+    use super::{MAX_PAGES, paginate_with};
     #[test]
     fn follows_cursors_until_the_last_page() -> Result<()> {
         let mut requested = Vec::new();

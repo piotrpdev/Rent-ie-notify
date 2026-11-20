@@ -5,8 +5,6 @@ use reqwest::blocking::Client;
 use crate::http::{self, Page};
 use crate::listing::{Listing, ListingSource, RawListing, SearchResult};
 
-const API_URL: &str = "https://gateway.daft.ie/api/v2/ads/listings";
-
 const DAFT_IE_BASE_URL: &str = "https://www.daft.ie";
 
 #[derive(Debug, DeJson)]
@@ -180,7 +178,7 @@ pub(crate) fn request_body_with_offset(request_body: &str, offset: u32) -> Resul
 }
 
 /// Fetches every results page for a daft.ie gateway request body.
-pub(crate) fn fetch_listings(request_body: &str) -> Result<Vec<Listing>> {
+pub(crate) fn fetch_listings(api_url: &str, request_body: &str) -> Result<Vec<Listing>> {
     let client = Client::new();
 
     http::paginate(|offset| {
@@ -194,7 +192,7 @@ pub(crate) fn fetch_listings(request_body: &str) -> Result<Vec<Listing>> {
         // The daft gateway is strict about browser-like headers: without
         // brand/platform it returns 400, and without origin/referer it returns 403.
         let request = client
-            .post(API_URL)
+            .post(api_url)
             .header("accept", "application/json")
             .header("brand", "daft")
             .header("content-type", "application/json")
@@ -210,8 +208,9 @@ pub(crate) fn fetch_listings(request_body: &str) -> Result<Vec<Listing>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_page_from_json, request_body_with_offset};
-    use anyhow::{Context as _, Result, bail};
+    use anyhow::{Context as _, Result, anyhow, bail};
+
+    use super::{extract_page_from_json, fetch_listings, request_body_with_offset};
     const SEARCH_JSON: &str = r#"{"listings":[{"listing":{"id":6710820,"title":"Rockshire Road, Ferrybank, Co. Waterford","price":"€1,800 per month","numBedrooms":"2 Bed","numBathrooms":"1 Bath","propertyType":"Apartment","media":{"images":[{"size720x480":"https://media.daft.ie/example.jpg","size72x52":"https://media.daft.ie/thumb.jpg"}]},"seoFriendlyPath":"/for-rent/rockshire-road-ferrybank-co-waterford/6710820","publishDate":1794576513203}}]}"#;
 
     #[test]
@@ -350,6 +349,39 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), 31);
 
+        Ok(())
+    }
+
+    #[test]
+    fn follows_next_from_with_the_required_headers() -> Result<()> {
+        let page = |id: u32, next_from: u32| {
+            format!(
+                r#"{{"listings":[{{"listing":{{"id":{id},"title":"Listing {id}","price":"€1","seoFriendlyPath":"/for-rent/slug-{id}/{id}"}}}}],"paging":{{"nextFrom":{next_from},"displayingTo":{id},"totalResults":2}}}}"#
+            )
+        };
+        let (base, server) =
+            crate::test_support::run_server(vec![(200, page(1, 1)), (200, page(2, 0))])?;
+
+        let listings = fetch_listings(
+            &format!("{base}/api/v2/ads/listings"),
+            r#"{"section":"residential-to-rent","paging":{"from":"0","pageSize":"1"}}"#,
+        )?;
+
+        let ids: Vec<&str> = listings.iter().map(|listing| listing.id.as_str()).collect();
+        assert_eq!(ids, vec!["1", "2"]);
+
+        let requests = server.join().map_err(|_| anyhow!("server panicked"))?;
+        let second = requests.get(1).context("expected a second request")?;
+        assert!(
+            second
+                .body
+                .contains(r#""paging":{"from":1,"pageSize":"1"}"#)
+        );
+        for request in &requests {
+            assert_eq!(request.header("brand"), Some("daft"));
+            assert_eq!(request.header("platform"), Some("web"));
+            assert_eq!(request.header("origin"), Some("https://www.daft.ie"));
+        }
         Ok(())
     }
 }

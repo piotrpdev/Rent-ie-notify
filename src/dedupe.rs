@@ -99,11 +99,12 @@ pub(crate) fn group_listings(listings: Vec<Listing>) -> Vec<Vec<Listing>> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::{Context as _, Result};
+
     use super::{group_listings, representative};
     use crate::listing::{Listing, ListingSource};
     use crate::test_support;
     use crate::{daft_ie, rent_ie};
-    use anyhow::{Context as _, Result};
     fn listing(id: &str, image_keys: &[&str], source: ListingSource) -> Listing {
         Listing {
             image_keys: image_keys.iter().map(ToString::to_string).collect(),

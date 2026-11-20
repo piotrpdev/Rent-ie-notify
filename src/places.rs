@@ -81,9 +81,10 @@ pub(crate) fn format_distance(distance_km: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::{Result, bail};
+
     use super::{Place, distance_km, format_distance, parse};
     use crate::listing::Coordinates;
-    use anyhow::{Result, bail};
     #[test]
     fn parses_places_and_distances() -> Result<()> {
         let places = parse(

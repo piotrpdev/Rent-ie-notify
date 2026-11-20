@@ -8,6 +8,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `src/config.rs` — `Config::from_env` reads and validates every environment variable up front (blank = unset; webhook required unless `DRY_RUN`/`SEED_SENT_IDS`).
 - `src/next_data.rs` — Next.js helpers shared by rent.ie and property.ie: `__NEXT_DATA__` extraction (via `tl`), `_next/data` route resolution, `Paging`, slug extraction.
 - `src/state.rs` — loads/appends (and syncs) `sent_ids.txt` (legacy ID normalization, `HashSet` lookups) and takes the per-run lock.
+- `src/endpoints.rs` — `Endpoints`: base URLs of rent.ie/property.ie `_next/data`, the daft.ie gateway, and ORS. Production uses `Endpoints::default()`; tests point them at local `tiny_http` servers. Public listing links always use the real sites.
 - `src/http.rs` — `send_text` (send + status check + body) and `paginate` (sequential page loop with `delay::sleep()`, capped at 50 pages and stopped if the cursor doesn't advance), shared by every source.
 - `src/delay.rs` — jittered delay helper for paginated/detail requests.
 - `src/listing.rs` — shared `Listing` model (detail-endpoint fields nested in `ListingDetails`), the `RawListing` search-result schema shared by all three sites (`into_listing` does the common conversion; sites supply link and detail section), coordinates, image-key extraction, and description/date formatting.
@@ -19,7 +20,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `src/daft_ie.rs` — fetches (`fetch_listings`) and parses daft.ie gateway API responses; links use `https://www.daft.ie<seoFriendlyPath>`.
 - `src/property_ie.rs` — fetches (`fetch_listings`) and builds property.ie `_next/data` search URLs from `__NEXT_DATA__` metadata and parses its search JSON. All outbound HTTP uses reqwest blocking; property.ie requires HTTP/2.
 - `src/slack.rs` — Slack Block Kit payload built with `nanoserde` (scraped text is mrkdwn-escaped), plus `Sender`, which spaces messages ~1.1 s apart, waits out 429s (`Retry-After`, max 3 retries), and retries a rejected message once without images.
-- `src/test_support.rs` — `#[cfg(test)]` listing builder and local HTTP sink (`run_sink`) shared by unit tests.
+- `src/test_support.rs` — `#[cfg(test)]` listing builder, `run_server` (local HTTP server replaying canned responses and recording requests), and the Slack-like `run_sink`. `delay::sleep` is a no-op in test builds.
 - `scripts/check.sh` — runs fmt, clippy, unit tests, archive tests, and the release build.
 - `examples/slack_sink_e2e.rs` — runs the real binary against a local Slack sink in a temporary working directory; `cargo slack-sink-e2e` is the alias.
 - `archives/rentie/` / `archives/daftie/` / `archives/propertyie/` — saved API JSON responses used by the ignored archive tests; not read at runtime.

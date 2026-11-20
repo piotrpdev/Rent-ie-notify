@@ -310,8 +310,9 @@ impl Sender {
 
 #[cfg(test)]
 mod tests {
-    use super::{Sender, escape, escape_url, listings_to_slack_message_json};
     use anyhow::{Result, anyhow};
+
+    use super::{Sender, escape, escape_url, listings_to_slack_message_json};
     #[test]
     fn escapes_mrkdwn_control_characters() {
         assert_eq!(

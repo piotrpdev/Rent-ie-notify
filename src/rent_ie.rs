@@ -7,6 +7,7 @@ use crate::http::{self, Page};
 use crate::listing::{Listing, ListingDetails, ListingSource, SearchResult};
 use crate::next_data::{self, Paging};
 
+/// Public site, used for listing links.
 const RENT_IE_BASE_URL: &str = "https://www.rent.ie";
 
 #[derive(Debug, DeJson)]
@@ -93,13 +94,13 @@ fn parse_next_page_data(html: &str) -> Result<NextPageData> {
     NextPageData::deserialize_json(&json).context("Failed to parse __NEXT_DATA__ JSON")
 }
 
-pub(crate) fn search_api_url(html: &str) -> Result<String> {
+pub(crate) fn search_api_url(base_url: &str, html: &str) -> Result<String> {
     let page_data = parse_next_page_data(html)?;
 
     let route = next_data::data_route(&page_data.page, &page_data.query.rest);
 
     let mut url = format!(
-        "{RENT_IE_BASE_URL}/_next/data/{}/{route}.json?propertyType={}&county={}",
+        "{base_url}/_next/data/{}/{route}.json?propertyType={}&county={}",
         page_data.build_id, page_data.query.property_type, page_data.query.county
     );
 
@@ -124,7 +125,11 @@ pub(crate) fn build_id_from_html(html: &str) -> Result<String> {
         .context("Failed to parse __NEXT_DATA__ build ID")
 }
 
-pub(crate) fn property_details_url(build_id: &str, listing: &Listing) -> Result<String> {
+pub(crate) fn property_details_url(
+    base_url: &str,
+    build_id: &str,
+    listing: &Listing,
+) -> Result<String> {
     let address = Some(next_data::slug_from_path(&listing.link))
         .filter(|address| !address.is_empty())
         .with_context(|| format!("Could not extract address from {}", listing.link))?;
@@ -135,7 +140,7 @@ pub(crate) fn property_details_url(build_id: &str, listing: &Listing) -> Result<
     };
 
     Ok(format!(
-        "{RENT_IE_BASE_URL}/_next/data/{build_id}/property.json?id={}&propertyType={property_type}&address={address}",
+        "{base_url}/_next/data/{build_id}/property.json?id={}&propertyType={property_type}&address={address}",
         listing.id
     ))
 }
@@ -195,7 +200,7 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page> {
 
 /// Fetches every results page for a rent.ie search URL. Also returns the
 /// Next.js build ID, which is needed for property-detail requests.
-pub(crate) fn fetch_listings(search_url: &str) -> Result<(Vec<Listing>, String)> {
+pub(crate) fn fetch_listings(base_url: &str, search_url: &str) -> Result<(Vec<Listing>, String)> {
     // `_next/data` URLs include a deployment-specific build ID that is only
     // published in the search page's `__NEXT_DATA__` metadata.
     let client = Client::new();
@@ -203,7 +208,7 @@ pub(crate) fn fetch_listings(search_url: &str) -> Result<(Vec<Listing>, String)>
     let html = http::send_text(client.get(search_url), "rent.ie search page")?;
 
     let build_id = build_id_from_html(&html)?;
-    let api_url = search_api_url(&html).context("Failed to build rent.ie API URL")?;
+    let api_url = search_api_url(base_url, &html).context("Failed to build rent.ie API URL")?;
 
     // rent.ie ignores pageSize/page_size, so paging is the only way to fetch
     // more than the first 20 results.
@@ -220,13 +225,18 @@ pub(crate) fn fetch_listings(search_url: &str) -> Result<(Vec<Listing>, String)>
 }
 
 /// Reads the current Next.js build ID from the rent.ie homepage.
-pub(crate) fn fetch_build_id() -> Result<String> {
-    let html = http::send_text(Client::new().get(RENT_IE_BASE_URL), "rent.ie homepage")?;
+pub(crate) fn fetch_build_id(base_url: &str) -> Result<String> {
+    let html = http::send_text(Client::new().get(base_url), "rent.ie homepage")?;
     build_id_from_html(&html)
 }
 
-fn fetch_details(client: &Client, build_id: &str, listing: &Listing) -> Result<ListingDetails> {
-    let url = property_details_url(build_id, listing)?;
+fn fetch_details(
+    client: &Client,
+    base_url: &str,
+    build_id: &str,
+    listing: &Listing,
+) -> Result<ListingDetails> {
+    let url = property_details_url(base_url, build_id, listing)?;
     let json = http::send_text(
         client.get(url).header("accept", "application/json"),
         "property details",
@@ -236,13 +246,13 @@ fn fetch_details(client: &Client, build_id: &str, listing: &Listing) -> Result<L
 
 /// Fills in availability, lease, and room details for each listing. Failures
 /// are logged per listing and leave its detail fields empty.
-pub(crate) fn add_listing_details(listings: &mut [Listing], build_id: &str) {
+pub(crate) fn add_listing_details(base_url: &str, listings: &mut [Listing], build_id: &str) {
     let count = listings.len();
     let client = Client::new();
     println!("Fetching property availability details...");
 
     for (index, listing) in listings.iter_mut().enumerate() {
-        match fetch_details(&client, build_id, listing) {
+        match fetch_details(&client, base_url, build_id, listing) {
             Ok(details) => listing.details = details,
             Err(error) => eprintln!(
                 "Failed to fetch property details for {}: {error:#}",
@@ -258,11 +268,15 @@ pub(crate) fn add_listing_details(listings: &mut [Listing], build_id: &str) {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::{Context as _, Result, anyhow, bail};
+
     use super::{
-        build_id_from_html, extract_details_from_json, extract_page_from_json, listing_url,
-        search_api_url,
+        add_listing_details, build_id_from_html, extract_details_from_json, extract_page_from_json,
+        fetch_listings, listing_url, search_api_url,
     };
-    use anyhow::{Context as _, Result, bail};
+    use crate::listing::{Listing, ListingSource};
+    const BASE: &str = "https://www.rent.ie";
+
     const PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html>
 <head>
@@ -282,7 +296,7 @@ mod tests {
     #[test]
     fn builds_the_search_api_url_from_page_data() -> Result<()> {
         assert_eq!(
-            search_api_url(PAGE_HTML)?,
+            search_api_url(BASE, PAGE_HTML)?,
             "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre/room-type_either/sort-by_date-entered_down.json?propertyType=rooms-to-rent&county=waterford&areaFamily=locality&rest=waterford-city-centre&rest=room-type_either&rest=sort-by_date-entered_down"
         );
 
@@ -295,7 +309,7 @@ mod tests {
             r#"{"propertyType":"houses-to-let","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre"]}"#,
         );
         assert_eq!(
-            search_api_url(&houses_html)?,
+            search_api_url(BASE, &houses_html)?,
             "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre.json?propertyType=houses-to-let&county=waterford&areaFamily=renting&rest=waterford-city-centre"
         );
 
@@ -303,7 +317,7 @@ mod tests {
             r#"{"propertyType":"rooms-to-rent","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre","room-type_either"]}"#,
         );
         assert_eq!(
-            search_api_url(&rooms_html)?,
+            search_api_url(BASE, &rooms_html)?,
             "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre/room-type_either.json?propertyType=rooms-to-rent&county=waterford&areaFamily=renting&rest=waterford-city-centre&rest=room-type_either"
         );
 
@@ -316,7 +330,7 @@ mod tests {
             r#"{"propertyType":"houses-to-let","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre","rent_0-650"]}"#,
         );
         assert_eq!(
-            search_api_url(&houses_html)?,
+            search_api_url(BASE, &houses_html)?,
             "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre/rent_0-650.json?propertyType=houses-to-let&county=waterford&areaFamily=renting&rest=waterford-city-centre&rest=rent_0-650"
         );
 
@@ -324,7 +338,7 @@ mod tests {
             r#"{"propertyType":"rooms-to-rent","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre","rent_0-950"]}"#,
         );
         assert_eq!(
-            search_api_url(&rooms_html)?,
+            search_api_url(BASE, &rooms_html)?,
             "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre/rent_0-950.json?propertyType=rooms-to-rent&county=waterford&areaFamily=renting&rest=waterford-city-centre&rest=rent_0-950"
         );
 
@@ -389,7 +403,7 @@ mod tests {
 
     #[test]
     fn reports_missing_next_data() {
-        assert!(search_api_url("<html><body></body></html>").is_err());
+        assert!(search_api_url(BASE, "<html><body></body></html>").is_err());
     }
 
     #[test]
@@ -499,6 +513,74 @@ mod tests {
         assert_eq!(details.available_from, "Nov 30th, 2026");
         assert_eq!(details.minimum_lease, "1 Year");
 
+        Ok(())
+    }
+
+    fn api_page(current: u32, total: u32, id: u32) -> String {
+        format!(
+            r#"{{"pageProps":{{"propertyType":"houses-to-let","paging":{{"currentPage":{current},"totalPages":{total}}},"listings":[{{"listing":{{"id":{id},"title":"Listing {id}","price":"€1,000 per month","numBedrooms":"2 Bed","seoFriendlyPath":"/share/slug-{id}/{id}"}}}}]}}}}"#
+        )
+    }
+
+    #[test]
+    fn fetches_the_search_page_then_every_api_page() -> Result<()> {
+        let (base, server) = crate::test_support::run_server(vec![
+            (200, PAGE_HTML.to_string()),
+            (200, api_page(1, 2, 1)),
+            (200, api_page(2, 2, 2)),
+        ])?;
+
+        let (listings, build_id) = fetch_listings(&base, &format!("{base}/search-page"))?;
+
+        assert_eq!(build_id, "test-build");
+        let ids: Vec<&str> = listings.iter().map(|listing| listing.id.as_str()).collect();
+        assert_eq!(ids, vec!["1", "2"]);
+        assert_eq!(
+            listings.first().map(|listing| listing.link.as_str()),
+            Some("https://www.rent.ie/houses-to-let/slug-1/1/")
+        );
+
+        let requests = server.join().map_err(|_| anyhow!("server panicked"))?;
+        let urls: Vec<&str> = requests
+            .iter()
+            .map(|request| request.url.as_str())
+            .collect();
+        assert_eq!(urls.first(), Some(&"/search-page"));
+        assert!(urls.get(1).is_some_and(|url| {
+            url.starts_with("/_next/data/test-build/search/") && !url.contains("&page=")
+        }));
+        assert!(urls.get(2).is_some_and(|url| url.ends_with("&page=2")));
+        Ok(())
+    }
+
+    #[test]
+    fn adds_details_and_tolerates_individual_failures() -> Result<()> {
+        let details = r#"{"pageProps":{"listing":{"propertyOverview":[{"label":"Available From","text":"Now"},{"label":"Bathroom","text":"2"}]}}}"#;
+        let (base, server) = crate::test_support::run_server(vec![
+            (200, details.to_string()),
+            (500, String::new()),
+        ])?;
+        let mut listings: Vec<Listing> = ["1", "2"]
+            .into_iter()
+            .map(|id| Listing {
+                link: format!("https://www.rent.ie/houses-to-let/slug-{id}/{id}/"),
+                ..crate::test_support::listing(id, ListingSource::Rent)
+            })
+            .collect();
+
+        add_listing_details(&base, &mut listings, "build");
+
+        let first = listings.first().context("expected listing 1")?;
+        assert_eq!(first.details.available_from, "Now");
+        assert_eq!(first.details.bathrooms, Some(2));
+        let second = listings.get(1).context("expected listing 2")?;
+        assert_eq!(second.details.available_from, "");
+
+        let requests = server.join().map_err(|_| anyhow!("server panicked"))?;
+        assert_eq!(
+            requests.first().map(|request| request.url.as_str()),
+            Some("/_next/data/build/property.json?id=1&propertyType=houses-to-let&address=slug-1")
+        );
         Ok(())
     }
 }

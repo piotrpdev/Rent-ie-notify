@@ -188,8 +188,9 @@ pub(crate) fn write_report(dir: &str, listings: &[Listing]) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::{Context as _, Result};
     use std::path::Path;
+
+    use anyhow::{Context as _, Result};
 
     use tempfile::tempdir;
 

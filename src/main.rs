@@ -1,14 +1,15 @@
+use anyhow::{Result, anyhow, bail};
 use std::{collections::HashSet, path::Path, thread};
 
-use anyhow::{Result, anyhow, bail};
-
 use crate::config::{Config, Sources};
+use crate::endpoints::Endpoints;
 use crate::listing::Listing;
 
 pub mod config;
 pub mod daft_ie;
 pub mod dedupe;
 pub mod delay;
+pub mod endpoints;
 pub mod http;
 pub mod listing;
 pub mod next_data;
@@ -57,17 +58,21 @@ fn join_source<T>(
 /// Fetches all configured sources concurrently. Pagination remains sequential
 /// within each source so we don't burst the same host with parallel requests.
 /// Fails only if every configured source failed.
-fn fetch_all_sources(sources: Sources) -> Result<FetchedListings> {
+fn fetch_all_sources(sources: Sources, endpoints: &Endpoints) -> Result<FetchedListings> {
     let Sources {
         rent_ie_url,
         daft_ie_request,
         property_ie_url,
     } = sources;
-    let rent_thread = rent_ie_url.map(|url| thread::spawn(move || rent_ie::fetch_listings(&url)));
-    let daft_thread =
-        daft_ie_request.map(|body| thread::spawn(move || daft_ie::fetch_listings(&body)));
-    let property_thread =
-        property_ie_url.map(|url| thread::spawn(move || property_ie::fetch_listings(&url)));
+    let rent_base = endpoints.rent_ie.clone();
+    let rent_thread =
+        rent_ie_url.map(|url| thread::spawn(move || rent_ie::fetch_listings(&rent_base, &url)));
+    let daft_api = endpoints.daft_ie_api.clone();
+    let daft_thread = daft_ie_request
+        .map(|body| thread::spawn(move || daft_ie::fetch_listings(&daft_api, &body)));
+    let property_base = endpoints.property_ie.clone();
+    let property_thread = property_ie_url
+        .map(|url| thread::spawn(move || property_ie::fetch_listings(&property_base, &url)));
     let configured = [
         rent_thread.is_some(),
         daft_thread.is_some(),
@@ -212,6 +217,7 @@ fn write_report(report_dir: &str, listings: &[Listing]) {
 /// Fetches property details for new listings (or for every unique listing
 /// with `TEXT_REPORT_INCLUDE_ALL`) and writes the optional text report.
 fn prepare_details_and_report(
+    endpoints: &Endpoints,
     groups: &[Vec<Listing>],
     new_listings: &mut [Listing],
     report_dir: Option<&str>,
@@ -225,7 +231,7 @@ fn prepare_details_and_report(
                 .filter_map(|group| dedupe::representative(group))
                 .collect();
 
-            populate_listing_details(&mut all_listings, rent_build_id);
+            populate_listing_details(endpoints, &mut all_listings, rent_build_id);
 
             for listing in new_listings.iter_mut() {
                 if let Some(source) = all_listings
@@ -239,7 +245,7 @@ fn prepare_details_and_report(
             write_report(report_dir, &all_listings);
         }
         report_dir => {
-            populate_listing_details(new_listings, rent_build_id);
+            populate_listing_details(endpoints, new_listings, rent_build_id);
             if let Some(report_dir) = report_dir {
                 write_report(report_dir, new_listings);
             }
@@ -247,13 +253,17 @@ fn prepare_details_and_report(
     }
 }
 
-fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<String>) {
+fn populate_listing_details(
+    endpoints: &Endpoints,
+    listings: &mut [Listing],
+    rent_build_id: Option<String>,
+) {
     if listings.is_empty() {
         return;
     }
 
     let details_build_id = rent_build_id.map_or_else(
-        || match rent_ie::fetch_build_id() {
+        || match rent_ie::fetch_build_id(&endpoints.rent_ie) {
             Ok(build_id) => Some(build_id),
             Err(error) => {
                 eprintln!("Failed to fetch rent.ie build ID for property details: {error:#}");
@@ -264,7 +274,7 @@ fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<Stri
     );
 
     if let Some(build_id) = details_build_id {
-        rent_ie::add_listing_details(listings, &build_id);
+        rent_ie::add_listing_details(&endpoints.rent_ie, listings, &build_id);
     }
 }
 
@@ -280,6 +290,7 @@ fn main() -> Result<()> {
         dry_run,
         seed_only,
     } = Config::from_env()?;
+    let endpoints = Endpoints::default();
     if dry_run {
         println!("DRY_RUN is set: Slack payloads are printed and sent_ids.txt is not updated.");
     }
@@ -300,7 +311,7 @@ fn main() -> Result<()> {
         mut listings,
         rent_build_id,
         mut failures,
-    } = fetch_all_sources(sources)?;
+    } = fetch_all_sources(sources, &endpoints)?;
 
     if let Some(max_beds) = max_beds {
         retain_max_beds(&mut listings, max_beds);
@@ -330,6 +341,7 @@ fn main() -> Result<()> {
     }
 
     prepare_details_and_report(
+        &endpoints,
         &groups,
         &mut new_listings,
         text_report_dir.as_deref(),
@@ -345,7 +357,7 @@ fn main() -> Result<()> {
     let routes = ors_api_key
         .as_deref()
         .map_or_else(routing::RouteMap::new, |api_key| {
-            routing::fetch_routes(&new_listings, &places, api_key)
+            routing::fetch_routes(&endpoints.ors_matrix, &new_listings, &places, api_key)
         });
 
     let mut delivery = match webhook_url {
@@ -368,12 +380,16 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::{Context as _, Result, anyhow};
     use std::collections::HashSet;
 
-    use super::{Delivery, retain_max_beds, select_new, send_slack_listings};
+    use anyhow::{Context as _, Result, anyhow};
+
+    use super::{Delivery, fetch_all_sources, retain_max_beds, select_new, send_slack_listings};
+    use crate::config::Sources;
+    use crate::endpoints::Endpoints;
     use crate::listing::{Listing, ListingSource};
     use crate::routing::RouteMap;
+    use crate::test_support::run_server;
     use crate::test_support::{listing, run_sink};
     use crate::{slack, state};
 
@@ -475,5 +491,50 @@ mod tests {
 
         assert!(!path.exists());
         Ok(())
+    }
+
+    /// Nothing listens on port 1, so requests there fail immediately.
+    const DEAD_URL: &str = "http://127.0.0.1:1/search";
+
+    #[test]
+    fn keeps_going_when_one_source_fails() -> Result<()> {
+        let daft_page = r#"{"listings":[{"listing":{"id":7,"title":"Listing 7","price":"€1","seoFriendlyPath":"/for-rent/slug/7"}}]}"#;
+        let (daft_api, server) = run_server(vec![(200, daft_page.to_string())])?;
+        let endpoints = Endpoints {
+            daft_ie_api: daft_api,
+            ..Endpoints::default()
+        };
+        let sources = Sources {
+            rent_ie_url: Some(DEAD_URL.to_string()),
+            daft_ie_request: Some(r#"{"paging":{"from":"0"}}"#.to_string()),
+            property_ie_url: None,
+        };
+
+        let fetched = fetch_all_sources(sources, &endpoints)?;
+
+        assert_eq!(ids(&fetched.listings), vec!["7"]);
+        assert!(fetched.rent_build_id.is_none());
+        assert_eq!(fetched.failures.len(), 1);
+        assert!(
+            fetched
+                .failures
+                .iter()
+                .all(|failure| failure.starts_with("rent.ie: "))
+        );
+        server.join().map_err(|_| anyhow!("server panicked"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn fails_when_every_source_fails() {
+        let sources = Sources {
+            rent_ie_url: Some(DEAD_URL.to_string()),
+            property_ie_url: Some(DEAD_URL.to_string()),
+            ..Sources::default()
+        };
+
+        let result = fetch_all_sources(sources, &Endpoints::default());
+
+        assert!(result.is_err_and(|error| error.to_string().starts_with("All sources failed")));
     }
 }
