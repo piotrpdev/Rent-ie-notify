@@ -21,7 +21,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `src/test_support.rs` — `#[cfg(test)]` listing builder and local HTTP sink (`run_sink`) shared by unit tests.
 - `scripts/check.sh` — runs fmt, clippy, unit tests, archive tests, and the release build.
 - `examples/slack_sink_e2e.rs` — runs the real binary against a local Slack sink in a temporary working directory; `cargo slack-sink-e2e` is the alias.
-- `archives/rentie/` / `archives/daftie/` — saved API JSON responses for local verification; not read at runtime.
+- `archives/rentie/` / `archives/daftie/` / `archives/propertyie/` — saved API JSON responses used by the ignored archive tests; not read at runtime.
 - `check_rent_ie.service` / `check_rent_ie.timer` — hourly systemd deployment; hardcodes user, repo/binary paths, and env vars.
 - `.github/workflows/hourly_listings.yaml` — builds/runs with `cargo run --locked --release`; persists `sent_ids.txt` as a workflow artifact; `schedule` is commented out.
 
@@ -29,7 +29,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 
 - Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (unit tests plus ignored archive-backed tests).
 - Check everything: `scripts/check.sh` (also runs the archive tests and release build).
-- Archive check: `cargo test --locked -- --ignored` (parses the rent.ie and daft.ie fixtures in `archives/`).
+- Archive check: `cargo test --locked -- --ignored` (parses every fixture in `archives/`).
 - Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`/`PROPERTY_IE_URL`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.
 - Build: `cargo build --release` → `target/release/Rent-ie-notify`.
 - Run from the repo root with `SLACK_WEBHOOK_URL` and at least one (non-blank; blank values count as unset) of `RENT_IE_URL`, `DAFT_IE_REQUEST`, or `PROPERTY_IE_URL` set. Optional `PLACES_OF_INTEREST` adds distance lines; optional `OPENROUTESERVICE_API_KEY` enables driving times/distances; optional `TEXT_REPORT_DIR` writes grouped timestamped text reports; optional `MAX_BEDS` caps bedrooms across all sources.

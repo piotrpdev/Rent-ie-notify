@@ -548,4 +548,35 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    #[ignore = "uses the local archives/ fixtures"]
+    fn parses_archived_paginated_search_and_details() -> Result<(), String> {
+        let read = |path: &str| {
+            std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))
+        };
+        let (page_one, next_page) = extract_page_from_json(&read(
+            "archives/rentie/search_waterford_city_centre_houses_rent_0-1800_page_1.json",
+        )?)?;
+        assert_eq!(page_one.len(), 20);
+        assert_eq!(next_page, Some(2));
+        let Some(first) = page_one.first() else {
+            return Err("expected listings on page 1".to_string());
+        };
+        assert_eq!(first.id, "6720949");
+        assert_eq!(first.bedrooms, Some(3));
+        assert!(first.link.starts_with("https://www.rent.ie/houses-to-let/"));
+
+        let (page_two, next_page) = extract_page_from_json(&read(
+            "archives/rentie/search_waterford_city_centre_houses_rent_0-1800_page_2.json",
+        )?)?;
+        assert_eq!(page_two.len(), 6);
+        assert_eq!(next_page, None);
+
+        let details = extract_details_from_json(&read("archives/rentie/property_6721798.json")?)?;
+        assert_eq!(details.available_from, "Nov 30th, 2026");
+        assert_eq!(details.minimum_lease, "1 Year");
+
+        Ok(())
+    }
 }

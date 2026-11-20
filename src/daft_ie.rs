@@ -404,4 +404,42 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    #[ignore = "uses the local archives/ fixtures"]
+    fn parses_archived_paginated_search() -> Result<(), String> {
+        let read = |path: &str| {
+            std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))
+        };
+        let (page_one, next_from) = extract_page_from_json(&read(
+            "archives/daftie/residential_waterford_city_rent_0-1800_page_1.json",
+        )?)?;
+        assert_eq!(page_one.len(), 20);
+        assert_eq!(next_from, Some(20));
+        assert_eq!(
+            page_one.first().and_then(|listing| listing.bedrooms),
+            Some(2)
+        );
+        // Not every daft.ie listing has a map point.
+        let with_coordinates = page_one
+            .iter()
+            .filter(|listing| listing.coordinates.is_some())
+            .count();
+        assert_eq!(with_coordinates, 17);
+
+        let (page_two, next_from) = extract_page_from_json(&read(
+            "archives/daftie/residential_waterford_city_rent_0-1800_page_2.json",
+        )?)?;
+        assert_eq!(page_two.len(), 11);
+        assert_eq!(next_from, None);
+
+        let ids: std::collections::HashSet<&str> = page_one
+            .iter()
+            .chain(&page_two)
+            .map(|listing| listing.id.as_str())
+            .collect();
+        assert_eq!(ids.len(), 31);
+
+        Ok(())
+    }
 }

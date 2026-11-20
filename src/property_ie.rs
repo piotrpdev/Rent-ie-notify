@@ -260,4 +260,41 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    #[ignore = "uses the local archives/ fixtures"]
+    fn parses_archived_search_and_details() -> Result<(), String> {
+        let read = |path: &str| {
+            std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))
+        };
+        let (listings, next_page) = extract_page_from_json(&read(
+            "archives/propertyie/search_waterford_4beds_0-3500_page_1.json",
+        )?)?;
+        assert_eq!(listings.len(), 18);
+        assert_eq!(next_page, None);
+        let Some(first) = listings.first() else {
+            return Err("expected listings".to_string());
+        };
+        assert_eq!(first.id, "6721266");
+        assert_eq!(first.bedrooms, Some(4));
+        assert_eq!(
+            first.link,
+            "https://www.property.ie/property-to-let/lakunda-west-street-tallow-co-waterford/6721266/"
+        );
+        assert!(listings.iter().all(|listing| {
+            listing
+                .link
+                .starts_with("https://www.property.ie/property-to-let/")
+        }));
+
+        // This property response has no propertyOverview; details stay empty
+        // rather than failing.
+        let details = crate::rent_ie::extract_details_from_json(&read(
+            "archives/propertyie/property_6721266.json",
+        )?)?;
+        assert!(details.available_from.is_empty());
+        assert_eq!(details.bathrooms, None);
+
+        Ok(())
+    }
 }
