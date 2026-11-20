@@ -212,10 +212,9 @@ pub(crate) fn fetch_listings(base_url: &str, search_url: &str) -> Result<(Vec<Li
 
     // rent.ie ignores pageSize/page_size, so paging is the only way to fetch
     // more than the first 20 results.
-    let listings = http::paginate(|page| {
+    let listings = http::paginate("rent.ie", |page| {
         let page_url =
             page.map_or_else(|| api_url.clone(), |page| format!("{api_url}&page={page}"));
-        println!("Fetching rent.ie listings from API...");
         let json = http::send_text(client.get(page_url), "rent.ie listings")?;
         extract_page_from_json(&json)
             .context("Failed to extract rent.ie listings from API response")

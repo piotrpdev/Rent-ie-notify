@@ -10,7 +10,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - `src/next_data.rs` — Next.js helpers shared by rent.ie and property.ie: `__NEXT_DATA__` extraction (via `tl`), `_next/data` route resolution, `Paging`, slug extraction.
 - `src/state.rs` — loads/appends (and syncs) `sent_ids.txt` (legacy ID normalization, `HashSet` lookups) and takes the per-run lock.
 - `src/endpoints.rs` — `Endpoints`: base URLs of rent.ie/property.ie `_next/data`, the daft.ie gateway, and ORS. Production uses `Endpoints::default()`; tests point them at local `tiny_http` servers. Public listing links always use the real sites.
-- `src/http.rs` — `send_text` (send + status check + body) and `paginate` (sequential page loop with `delay::sleep()`, capped at 50 pages and stopped if the cursor doesn't advance), shared by every source.
+- `src/http.rs` — `send_text` (send + status check + body) and `paginate` (sequential page loop with `delay::sleep()` and per-page progress logs, capped at 50 pages and stopped if the cursor doesn't advance), shared by every source.
 - `src/delay.rs` — jittered delay helper for paginated/detail requests.
 - `src/listing.rs` — shared `Listing` model (detail-endpoint fields nested in `ListingDetails`), the `RawListing` search-result schema shared by all three sites (`into_listing` does the common conversion; sites supply the link and rent.ie `Section` — houses-to-let, rooms-to-rent, or `Other(slug)` — used for detail requests and report headings), coordinates, image-key extraction, and description/date formatting.
 - `src/places.rs` — parses `PLACES_OF_INTEREST`, computes haversine distances, and formats them for Slack.
@@ -58,6 +58,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 - All search APIs lack full descriptions; Slack uses `<numBedrooms>[ · <numBathrooms>] · <propertyType>`.
 - For each new group representative, `rent_ie::property_details_url`/`extract_details_from_json` fetch `propertyOverview` from the rent.ie property endpoint (it works for daft.ie and property.ie IDs too). Missing values omit the `Available from`/`Minimum lease` lines; individual detail failures are logged and do not fail the run.
 - All configured sources are fetched concurrently on separate threads. A failing source is logged and skipped; the run continues with the others (safe because a late-arriving duplicate groups with the already-sent listing) and exits non-zero at the end. The run aborts only if every configured source fails. Pagination and property-detail requests stay sequential and call `delay::sleep()` (1 second plus up to 500 ms of jitter) between requests to avoid rate limiting/bot detection.
+- Every run ends with one `Summary: fetched <source> <n>, … → <unique> unique, <new> new; <outcome>[; <k> failures]` line on stdout; grep journald for `Summary:` to follow runs.
 - Search API `publishDate` is epoch milliseconds and is converted to a UTC human-readable date such as `14th of November, 2026`.
 - `PLACES_OF_INTEREST` is an optional JSON array:
   `[{"name":"Work","latitude":52.244898,"longitude":-7.159315}]`.

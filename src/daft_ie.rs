@@ -181,14 +181,12 @@ pub(crate) fn request_body_with_offset(request_body: &str, offset: u32) -> Resul
 pub(crate) fn fetch_listings(api_url: &str, request_body: &str) -> Result<Vec<Listing>> {
     let client = Client::new();
 
-    http::paginate(|offset| {
+    http::paginate("daft.ie", |offset| {
         let body = match offset {
             None => request_body.to_string(),
             Some(offset) => request_body_with_offset(request_body, offset)
                 .context("Failed to update daft.ie paging")?,
         };
-
-        println!("Fetching daft.ie listings from API...");
         // The daft gateway is strict about browser-like headers: without
         // brand/platform it returns 400, and without origin/referer it returns 403.
         let request = client

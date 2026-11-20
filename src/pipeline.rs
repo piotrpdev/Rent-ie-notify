@@ -1,6 +1,6 @@
 //! One run of the notifier, from fetching sources to recording what was sent.
 
-use std::{collections::HashSet, path::Path, thread};
+use std::{collections::HashSet, fmt, path::Path, thread};
 
 use anyhow::{Result, anyhow, bail};
 
@@ -15,6 +15,8 @@ const SLACK_LISTINGS_PER_MESSAGE: usize = 20;
 
 struct FetchedListings {
     listings: Vec<Listing>,
+    /// Listings fetched per successful source, for the run summary.
+    counts: Vec<(&'static str, usize)>,
     rent_build_id: Option<String>,
     /// One message per configured source that failed.
     failures: Vec<String>,
@@ -77,25 +79,70 @@ fn fetch_all_sources(sources: Sources, endpoints: &Endpoints) -> Result<FetchedL
         bail!("All sources failed: {}", failures.join("; "));
     }
 
-    let (mut listings, rent_build_id) = rent.map_or_else(
-        || (Vec::new(), None),
-        |(listings, build_id)| (listings, Some(build_id)),
-    );
-    listings.extend(daft.unwrap_or_default());
-    listings.extend(property.unwrap_or_default());
+    let mut counts = Vec::new();
+    let mut listings = Vec::new();
+    let rent_build_id = rent.map(|(rent_listings, build_id)| {
+        counts.push(("rent.ie", rent_listings.len()));
+        listings.extend(rent_listings);
+        build_id
+    });
+    for (name, fetched) in [("daft.ie", daft), ("property.ie", property)] {
+        if let Some(fetched) = fetched {
+            counts.push((name, fetched.len()));
+            listings.extend(fetched);
+        }
+    }
 
     Ok(FetchedListings {
         listings,
+        counts,
         rent_build_id,
         failures,
     })
 }
 
-/// Turns failures that were tolerated during the run (failed sources, Slack
-/// rejections) into a non-zero exit, so systemd/journald still flag the run.
-fn finish(failures: &[String]) -> Result<()> {
+/// Counts for the one-line summary printed at the end of every run.
+#[derive(Debug, Default)]
+struct Summary {
+    fetched: Vec<(&'static str, usize)>,
+    unique: usize,
+    new: usize,
+    /// What happened to the new listings, e.g. "3 sent".
+    outcome: String,
+}
+
+impl fmt::Display for Summary {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let fetched: Vec<String> = self
+            .fetched
+            .iter()
+            .map(|(source, count)| format!("{source} {count}"))
+            .collect();
+        let fetched = if fetched.is_empty() {
+            "nothing".to_string()
+        } else {
+            fetched.join(", ")
+        };
+        write!(
+            formatter,
+            "Summary: fetched {fetched} → {} unique, {} new; {}",
+            self.unique, self.new, self.outcome
+        )
+    }
+}
+
+/// Prints the run summary, then turns failures that were tolerated during
+/// the run (failed sources, Slack rejections) into a non-zero exit, so
+/// systemd/journald still flag the run.
+fn finish(summary: &Summary, failures: &[String]) -> Result<()> {
+    let failed = match failures.len() {
+        0 => String::new(),
+        1 => "; 1 failure".to_string(),
+        count => format!("; {count} failures"),
+    };
+    println!("{summary}{failed}");
+
     if failures.is_empty() {
-        println!("Done.");
         Ok(())
     } else {
         bail!("Run finished with errors: {}", failures.join("; "))
@@ -140,10 +187,18 @@ enum Delivery {
     DryRun,
 }
 
+/// How many listings Slack accepted or rejected.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Delivered {
+    sent: usize,
+    rejected: usize,
+}
+
 /// Posts new listings to Slack in chunks and appends each chunk's group IDs to
 /// the state file as soon as Slack accepts it, so a later failure neither loses
-/// nor re-sends earlier chunks. Rejected chunks are skipped (and retried next
-/// run); failing to record state aborts immediately to avoid duplicates.
+/// nor re-sends earlier chunks. Rejected chunks are skipped and counted (and
+/// retried next run); failing to record state aborts immediately to avoid
+/// duplicates.
 fn send_slack_listings(
     delivery: &mut Delivery,
     listings: &[Listing],
@@ -151,8 +206,8 @@ fn send_slack_listings(
     places: &[places::Place],
     routes: &routing::RouteMap,
     sent_ids_path: &Path,
-) -> Result<()> {
-    let mut rejected = 0;
+) -> Result<Delivered> {
+    let mut delivered = Delivered::default();
 
     for (chunk, chunk_ids) in listings
         .chunks(SLACK_LISTINGS_PER_MESSAGE)
@@ -173,17 +228,15 @@ fn send_slack_listings(
         println!("Sending {} new listings to Slack...", chunk.len());
         if let Err(error) = sender.send(chunk, places, routes) {
             eprintln!("{error:#}");
-            rejected += chunk.len();
+            delivered.rejected += chunk.len();
             continue;
         }
 
         state::append(sent_ids_path, &unique_ids(chunk_ids.iter().flatten()))?;
+        delivered.sent += chunk.len();
     }
 
-    if rejected > 0 {
-        bail!("Slack did not accept {rejected} listings; they will be retried next run");
-    }
-    Ok(())
+    Ok(delivered)
 }
 
 /// Writes the optional text report. Empty reports are skipped, and failures
@@ -297,9 +350,14 @@ pub(crate) fn run(config: Config, endpoints: &Endpoints, state_dir: &Path) -> Re
 
     let FetchedListings {
         mut listings,
+        counts,
         rent_build_id,
         mut failures,
     } = fetch_all_sources(sources, endpoints)?;
+    let mut summary = Summary {
+        fetched: counts,
+        ..Summary::default()
+    };
 
     if let Some(max_beds) = max_beds {
         retain_max_beds(&mut listings, max_beds);
@@ -313,19 +371,23 @@ pub(crate) fn run(config: Config, endpoints: &Endpoints, state_dir: &Path) -> Re
     );
 
     let (mut new_listings, new_group_ids) = select_new(&groups, &sent_ids);
+    summary.unique = groups.len();
+    summary.new = new_listings.len();
 
     if seed_only {
         let ids = unique_ids(new_group_ids.iter().flatten());
         if dry_run {
             println!("DRY_RUN: would seed {} listing IDs.", ids.len());
+            summary.outcome = format!("would seed {} IDs (dry run)", ids.len());
         } else {
             println!(
                 "SEED_SENT_IDS is set: recording {} listing IDs without posting...",
                 ids.len()
             );
             state::append(&sent_ids_path, &ids)?;
+            summary.outcome = format!("{} IDs seeded", ids.len());
         }
-        return finish(&failures);
+        return finish(&summary, &failures);
     }
 
     prepare_details_and_report(
@@ -338,8 +400,8 @@ pub(crate) fn run(config: Config, endpoints: &Endpoints, state_dir: &Path) -> Re
     );
 
     if new_listings.is_empty() {
-        println!("No new listings.");
-        return finish(&failures);
+        summary.outcome = "nothing to send".to_string();
+        return finish(&summary, &failures);
     }
 
     let routes = ors_api_key
@@ -352,18 +414,27 @@ pub(crate) fn run(config: Config, endpoints: &Endpoints, state_dir: &Path) -> Re
         Some(webhook_url) if !dry_run => Delivery::Slack(slack::Sender::new(webhook_url)),
         _ => Delivery::DryRun,
     };
-    if let Err(error) = send_slack_listings(
+    let delivered = send_slack_listings(
         &mut delivery,
         &new_listings,
         &new_group_ids,
         &places,
         &routes,
         &sent_ids_path,
-    ) {
-        failures.push(format!("{error:#}"));
+    )?;
+    summary.outcome = if matches!(delivery, Delivery::DryRun) {
+        format!("would send {} (dry run)", new_listings.len())
+    } else {
+        format!("{} sent", delivered.sent)
+    };
+    if delivered.rejected > 0 {
+        failures.push(format!(
+            "Slack did not accept {} listings; they will be retried next run",
+            delivered.rejected
+        ));
     }
 
-    finish(&failures)
+    finish(&summary, &failures)
 }
 
 #[cfg(test)]
@@ -373,7 +444,8 @@ mod tests {
     use anyhow::{Context as _, Result, anyhow};
 
     use super::{
-        Delivery, fetch_all_sources, retain_max_beds, run, select_new, send_slack_listings,
+        Delivered, Delivery, Summary, fetch_all_sources, retain_max_beds, run, select_new,
+        send_slack_listings,
     };
     use crate::config::{Config, Sources};
     use crate::endpoints::Endpoints;
@@ -444,16 +516,22 @@ mod tests {
         let directory = tempfile::tempdir().context("failed to create temp dir")?;
         let path = directory.path().join("sent_ids.txt");
 
-        let result = send_slack_listings(
+        let delivered = send_slack_listings(
             &mut Delivery::Slack(slack::Sender::with_sleep(url, |_| {})),
             &listings,
             &group_ids,
             &[],
             &RouteMap::new(),
             &path,
-        );
+        )?;
 
-        assert!(result.is_err_and(|error| error.to_string().contains("20 listings")));
+        assert_eq!(
+            delivered,
+            Delivered {
+                sent: 25,
+                rejected: 20
+            }
+        );
         assert_eq!(sink.join().map_err(|_| anyhow!("sink panicked"))?.len(), 3);
         let content = std::fs::read_to_string(&path)?;
         let saved: Vec<&str> = content.lines().collect();
@@ -502,6 +580,7 @@ mod tests {
         let fetched = fetch_all_sources(sources, &endpoints)?;
 
         assert_eq!(ids(&fetched.listings), vec!["7"]);
+        assert_eq!(fetched.counts, vec![("daft.ie", 1)]);
         assert!(fetched.rent_build_id.is_none());
         assert_eq!(fetched.failures.len(), 1);
         assert!(
@@ -726,5 +805,23 @@ mod tests {
 
         assert!(result.is_err_and(|error| error.to_string().contains("in progress")));
         Ok(())
+    }
+
+    #[test]
+    fn summarizes_a_run_in_one_line() {
+        let summary = Summary {
+            fetched: vec![("rent.ie", 26), ("daft.ie", 31)],
+            unique: 40,
+            new: 3,
+            outcome: "3 sent".to_string(),
+        };
+        assert_eq!(
+            summary.to_string(),
+            "Summary: fetched rent.ie 26, daft.ie 31 → 40 unique, 3 new; 3 sent"
+        );
+        assert_eq!(
+            Summary::default().to_string(),
+            "Summary: fetched nothing → 0 unique, 0 new; "
+        );
     }
 }

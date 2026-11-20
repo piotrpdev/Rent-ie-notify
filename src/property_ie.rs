@@ -123,10 +123,9 @@ pub(crate) fn fetch_listings(base_url: &str, search_url: &str) -> Result<Vec<Lis
     let html = http::send_text(request, "property.ie search page")?;
     let api_url = search_api_url(base_url, &html)?;
 
-    http::paginate(|page| {
+    http::paginate("property.ie", |page| {
         let page_url =
             page.map_or_else(|| api_url.clone(), |page| format!("{api_url}&page={page}"));
-        println!("Fetching property.ie listings from API...");
         let request = client.get(page_url).header("accept", "application/json");
         let json = http::send_text(request, "property.ie listings")?;
         extract_page_from_json(&json)
