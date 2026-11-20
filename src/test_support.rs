@@ -1,5 +1,6 @@
 //! Shared helpers for unit tests.
 
+use anyhow::{Context as _, Result, anyhow};
 use std::thread::JoinHandle;
 
 use crate::listing::{Listing, ListingDetails, ListingSource};
@@ -26,13 +27,13 @@ pub(crate) fn listing(id: &str, source: ListingSource) -> Listing {
 /// Starts a local HTTP server that answers one request per entry in
 /// `statuses` (in order, each with `Retry-After: 0` and body `invalid_blocks`) and returns its URL plus a handle yielding the
 /// received request bodies.
-pub(crate) fn run_sink(statuses: Vec<u16>) -> Result<(String, JoinHandle<Vec<String>>), String> {
-    let server = tiny_http::Server::http("127.0.0.1:0").map_err(|error| error.to_string())?;
+pub(crate) fn run_sink(statuses: Vec<u16>) -> Result<(String, JoinHandle<Vec<String>>)> {
+    let server = tiny_http::Server::http("127.0.0.1:0").map_err(|error| anyhow!("{error}"))?;
     let port = server
         .server_addr()
         .to_ip()
         .map(|address| address.port())
-        .ok_or("sink has no IP address")?;
+        .context("sink has no IP address")?;
 
     let handle = std::thread::spawn(move || {
         let mut bodies = Vec::new();

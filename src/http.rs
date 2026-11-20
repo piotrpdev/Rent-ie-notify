@@ -1,3 +1,4 @@
+use anyhow::{Context as _, Result, bail};
 use reqwest::blocking::RequestBuilder;
 
 use crate::{delay, listing::Listing};
@@ -6,27 +7,21 @@ use crate::{delay, listing::Listing};
 /// (page number or offset) of the next page, if any.
 pub(crate) type Page = (Vec<Listing>, Option<u32>);
 
-/// Formats a reqwest error with its cause chain but without the request URL,
-/// which can be a secret (Slack webhook, rent.ie search URL).
-pub(crate) fn describe_error(error: reqwest::Error) -> String {
-    let error = error.without_url();
-    let mut message = error.to_string();
-    let mut source = std::error::Error::source(&error);
-    while let Some(cause) = source {
-        message.push_str(": ");
-        message.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    message
+/// Removes the request URL from a reqwest error, since it can be a secret
+/// (Slack webhook, rent.ie search URL). Wrap reqwest errors with this before
+/// adding context; the cause chain (e.g. "connection refused") is kept.
+pub(crate) fn without_url(error: reqwest::Error) -> anyhow::Error {
+    anyhow::Error::new(error.without_url())
 }
 
 /// Sends `request` and returns the body of a 2xx response. `what` names the
 /// resource in error messages, e.g. "rent.ie search page".
-/// Error messages never include the request URL (see [`describe_error`]).
-pub(crate) fn send_text(request: RequestBuilder, what: &str) -> Result<String, String> {
+/// Errors never include the request URL (see [`without_url`]).
+pub(crate) fn send_text(request: RequestBuilder, what: &str) -> Result<String> {
     let response = request
         .send()
-        .map_err(|error| format!("Failed to fetch {what}: {}", describe_error(error)))?;
+        .map_err(without_url)
+        .with_context(|| format!("Failed to fetch {what}"))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -35,15 +30,16 @@ pub(crate) fn send_text(request: RequestBuilder, what: &str) -> Result<String, S
         } else {
             ""
         };
-        return Err(format!(
+        bail!(
             "Failed to fetch {what}: received status code {}{hint}",
             status.as_u16()
-        ));
+        );
     }
 
     response
         .text()
-        .map_err(|error| format!("Failed to read {what}: {}", describe_error(error)))
+        .map_err(without_url)
+        .with_context(|| format!("Failed to read {what}"))
 }
 
 /// Upper bound on pages fetched per source, as a guard against APIs that
@@ -57,15 +53,15 @@ const MAX_PAGES: usize = 50;
 /// after [`MAX_PAGES`] pages, so a misbehaving API can't loop forever (which
 /// would also block every later systemd timer run).
 pub(crate) fn paginate(
-    fetch_page: impl FnMut(Option<u32>) -> Result<Page, String>,
-) -> Result<Vec<Listing>, String> {
+    fetch_page: impl FnMut(Option<u32>) -> Result<Page>,
+) -> Result<Vec<Listing>> {
     paginate_with(fetch_page, delay::sleep)
 }
 
 fn paginate_with(
-    mut fetch_page: impl FnMut(Option<u32>) -> Result<Page, String>,
+    mut fetch_page: impl FnMut(Option<u32>) -> Result<Page>,
     mut sleep: impl FnMut(),
-) -> Result<Vec<Listing>, String> {
+) -> Result<Vec<Listing>> {
     let mut listings = Vec::new();
     let mut cursor = None;
 
@@ -91,9 +87,9 @@ fn paginate_with(
 #[cfg(test)]
 mod tests {
     use super::{MAX_PAGES, paginate_with};
-
+    use anyhow::Result;
     #[test]
-    fn follows_cursors_until_the_last_page() -> Result<(), String> {
+    fn follows_cursors_until_the_last_page() -> Result<()> {
         let mut requested = Vec::new();
         paginate_with(
             |cursor| {
@@ -110,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn stops_when_the_cursor_does_not_advance() -> Result<(), String> {
+    fn stops_when_the_cursor_does_not_advance() -> Result<()> {
         let mut calls = 0;
         paginate_with(
             |_| {
@@ -124,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn stops_after_the_page_limit() -> Result<(), String> {
+    fn stops_after_the_page_limit() -> Result<()> {
         let mut calls: u32 = 0;
         paginate_with(
             |_| {

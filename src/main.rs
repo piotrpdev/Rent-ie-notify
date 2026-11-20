@@ -1,3 +1,4 @@
+use anyhow::{Context as _, Result, anyhow, bail};
 use std::{collections::HashSet, env, path::Path, thread};
 
 use crate::listing::Listing;
@@ -34,18 +35,18 @@ struct FetchedListings {
 /// propagating it so the other sources can still be processed.
 fn join_source<T>(
     name: &str,
-    handle: Option<thread::JoinHandle<Result<T, String>>>,
+    handle: Option<thread::JoinHandle<Result<T>>>,
     failures: &mut Vec<String>,
 ) -> Option<T> {
     let result = handle?
         .join()
-        .unwrap_or_else(|_| Err("fetch thread panicked".to_string()));
+        .unwrap_or_else(|_| Err(anyhow!("fetch thread panicked")));
 
     match result {
         Ok(value) => Some(value),
         Err(error) => {
-            eprintln!("{name} failed, continuing with the other sources: {error}");
-            failures.push(format!("{name}: {error}"));
+            eprintln!("{name} failed, continuing with the other sources: {error:#}");
+            failures.push(format!("{name}: {error:#}"));
             None
         }
     }
@@ -58,7 +59,7 @@ fn fetch_all_sources(
     rent_ie_url: Option<String>,
     daft_ie_request: Option<String>,
     property_ie_url: Option<String>,
-) -> Result<FetchedListings, String> {
+) -> Result<FetchedListings> {
     let rent_thread = rent_ie_url.map(|url| thread::spawn(move || rent_ie::fetch_listings(&url)));
     let daft_thread =
         daft_ie_request.map(|body| thread::spawn(move || daft_ie::fetch_listings(&body)));
@@ -79,7 +80,7 @@ fn fetch_all_sources(
     let property = join_source("property.ie", property_thread, &mut failures);
 
     if failures.len() == configured {
-        return Err(format!("All sources failed: {}", failures.join("; ")));
+        bail!("All sources failed: {}", failures.join("; "));
     }
 
     let (mut listings, rent_build_id) = rent.map_or_else(
@@ -98,12 +99,12 @@ fn fetch_all_sources(
 
 /// Turns failures that were tolerated during the run (failed sources, Slack
 /// rejections) into a non-zero exit, so systemd/journald still flag the run.
-fn finish(failures: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+fn finish(failures: &[String]) -> Result<()> {
     if failures.is_empty() {
         println!("Done.");
         Ok(())
     } else {
-        Err(format!("Run finished with errors: {}", failures.join("; ")).into())
+        bail!("Run finished with errors: {}", failures.join("; "))
     }
 }
 
@@ -156,7 +157,7 @@ fn send_slack_listings(
     places: &[places::Place],
     routes: &routing::RouteMap,
     sent_ids_path: &Path,
-) -> Result<(), String> {
+) -> Result<()> {
     let mut rejected = 0;
 
     for (chunk, chunk_ids) in listings
@@ -177,7 +178,7 @@ fn send_slack_listings(
 
         println!("Sending {} new listings to Slack...", chunk.len());
         if let Err(error) = sender.send(chunk, places, routes) {
-            eprintln!("{error}");
+            eprintln!("{error:#}");
             rejected += chunk.len();
             continue;
         }
@@ -186,9 +187,7 @@ fn send_slack_listings(
     }
 
     if rejected > 0 {
-        return Err(format!(
-            "Slack did not accept {rejected} listings; they will be retried next run"
-        ));
+        bail!("Slack did not accept {rejected} listings; they will be retried next run");
     }
     Ok(())
 }
@@ -203,7 +202,7 @@ fn write_report(report_dir: &str, listings: &[Listing]) {
 
     match text::write_report(report_dir, listings) {
         Ok(path) => println!("Wrote report to {path}"),
-        Err(error) => eprintln!("{error}; continuing without a report."),
+        Err(error) => eprintln!("{error:#}; continuing without a report."),
     }
 }
 
@@ -254,7 +253,7 @@ fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<Stri
         || match rent_ie::fetch_build_id() {
             Ok(build_id) => Some(build_id),
             Err(error) => {
-                eprintln!("Failed to fetch rent.ie build ID for property details: {error}");
+                eprintln!("Failed to fetch rent.ie build ID for property details: {error:#}");
                 None
             }
         },
@@ -275,11 +274,11 @@ fn env_value(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn max_beds_from_env() -> Result<Option<u32>, String> {
+fn max_beds_from_env() -> Result<Option<u32>> {
     env_value("MAX_BEDS")
         .map(|value| value.parse::<u32>())
         .transpose()
-        .map_err(|error| format!("Invalid MAX_BEDS value: {error}"))
+        .context("Invalid MAX_BEDS value")
 }
 
 fn env_flag(name: &str) -> bool {
@@ -291,13 +290,13 @@ fn env_flag(name: &str) -> bool {
     })
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     let dry_run = env_flag("DRY_RUN");
     let seed_only = env_flag("SEED_SENT_IDS");
     let webhook_url = env_value("SLACK_WEBHOOK_URL");
     // Dry runs and seeding never post, so they don't need a webhook.
     if webhook_url.is_none() && !dry_run && !seed_only {
-        return Err("Failed to get SLACK_WEBHOOK_URL env var".into());
+        bail!("Failed to get SLACK_WEBHOOK_URL env var");
     }
     if dry_run {
         println!("DRY_RUN is set: Slack payloads are printed and sent_ids.txt is not updated.");
@@ -311,12 +310,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max_beds = max_beds_from_env()?;
 
     if rent_ie_url.is_none() && daft_ie_request.is_none() && property_ie_url.is_none() {
-        return Err("Set RENT_IE_URL, DAFT_IE_REQUEST, and/or PROPERTY_IE_URL".into());
+        bail!("Set RENT_IE_URL, DAFT_IE_REQUEST, and/or PROPERTY_IE_URL");
     }
 
     let places = match env_value(places::ENV_VAR) {
-        Some(value) => places::parse(&value)
-            .map_err(|error| format!("Failed to parse {}: {error}", places::ENV_VAR))?,
+        Some(value) => places::parse(&value)?,
         None => Vec::new(),
     };
 
@@ -396,7 +394,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &routes,
         sent_ids_path,
     ) {
-        failures.push(error);
+        failures.push(format!("{error:#}"));
     }
 
     finish(&failures)
@@ -404,6 +402,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::{Context as _, Result, anyhow};
     use std::collections::HashSet;
 
     use super::{Delivery, retain_max_beds, select_new, send_slack_listings};
@@ -466,13 +465,12 @@ mod tests {
     }
 
     #[test]
-    fn records_ids_only_for_messages_slack_accepts() -> Result<(), String> {
+    fn records_ids_only_for_messages_slack_accepts() -> Result<()> {
         // 45 listings -> messages of 20, 20, 5. The second message is rejected
         // (no images, so no retry); the others are accepted.
         let (listings, group_ids) = numbered(45);
         let (url, sink) = run_sink(vec![200, 400, 200])?;
-        let directory =
-            tempfile::tempdir().map_err(|error| format!("failed to create temp dir: {error}"))?;
+        let directory = tempfile::tempdir().context("failed to create temp dir")?;
         let path = directory.path().join("sent_ids.txt");
 
         let result = send_slack_listings(
@@ -484,9 +482,9 @@ mod tests {
             &path,
         );
 
-        assert!(result.is_err_and(|error| error.contains("20 listings")));
-        assert_eq!(sink.join().map_err(|_| "sink panicked")?.len(), 3);
-        let content = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+        assert!(result.is_err_and(|error| error.to_string().contains("20 listings")));
+        assert_eq!(sink.join().map_err(|_| anyhow!("sink panicked"))?.len(), 3);
+        let content = std::fs::read_to_string(&path)?;
         let saved: Vec<&str> = content.lines().collect();
         let expected: Vec<String> = (1..=20).chain(41..=45).map(|id| id.to_string()).collect();
         assert_eq!(saved, expected);
@@ -495,10 +493,9 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_posts_nothing_and_writes_no_state() -> Result<(), String> {
+    fn dry_run_posts_nothing_and_writes_no_state() -> Result<()> {
         let (listings, group_ids) = numbered(3);
-        let directory =
-            tempfile::tempdir().map_err(|error| format!("failed to create temp dir: {error}"))?;
+        let directory = tempfile::tempdir().context("failed to create temp dir")?;
         let path = directory.path().join("sent_ids.txt");
 
         send_slack_listings(

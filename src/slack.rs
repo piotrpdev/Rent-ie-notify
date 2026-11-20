@@ -1,3 +1,4 @@
+use anyhow::{Result, anyhow};
 use nanoserde::SerJson;
 use std::fmt::Write as _;
 use std::time::Duration;
@@ -191,7 +192,7 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 enum PostError {
     /// HTTP 429 with the wait Slack asked for.
     RateLimited(Duration),
-    Failed(String),
+    Failed(anyhow::Error),
 }
 
 fn post_once(client: &Client, webhook_url: &str, body: &str) -> Result<(), PostError> {
@@ -201,10 +202,7 @@ fn post_once(client: &Client, webhook_url: &str, body: &str) -> Result<(), PostE
         .body(body.to_string())
         .send()
         .map_err(|error| {
-            PostError::Failed(format!(
-                "Failed to send message to Slack: {}",
-                http::describe_error(error)
-            ))
+            PostError::Failed(http::without_url(error).context("Failed to send message to Slack"))
         })?;
 
     let status = response.status();
@@ -224,7 +222,7 @@ fn post_once(client: &Client, webhook_url: &str, body: &str) -> Result<(), PostE
 
     // Slack explains rejections in the body, e.g. "invalid_blocks".
     let reason = response.text().unwrap_or_default();
-    Err(PostError::Failed(format!(
+    Err(PostError::Failed(anyhow!(
         "Slack rejected the message with status {}: {}",
         status.as_u16(),
         reason.trim()
@@ -274,9 +272,9 @@ impl Sender {
             }
         }
 
-        Err(PostError::Failed(
-            "Slack kept rate limiting the message".to_string(),
-        ))
+        Err(PostError::Failed(anyhow!(
+            "Slack kept rate limiting the message"
+        )))
     }
 
     /// Posts one message for `listings`. Slack rejects the whole message when
@@ -287,7 +285,7 @@ impl Sender {
         listings: &[Listing],
         places: &[Place],
         routes: &RouteMap,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let has_images = listings.iter().any(|listing| !listing.img_url.is_empty());
         let result = self.post(&listings_to_slack_message_json(
             listings, places, routes, true,
@@ -295,7 +293,7 @@ impl Sender {
 
         let result = match result {
             Err(PostError::Failed(error)) if has_images => {
-                eprintln!("{error}; retrying without images.");
+                eprintln!("{error:#}; retrying without images.");
                 self.post(&listings_to_slack_message_json(
                     listings, places, routes, false,
                 ))
@@ -305,7 +303,7 @@ impl Sender {
 
         result.map_err(|error| match error {
             PostError::Failed(error) => error,
-            PostError::RateLimited(_) => "Slack kept rate limiting the message".to_string(),
+            PostError::RateLimited(_) => anyhow!("Slack kept rate limiting the message"),
         })
     }
 }
@@ -313,7 +311,7 @@ impl Sender {
 #[cfg(test)]
 mod tests {
     use super::{Sender, escape, escape_url, listings_to_slack_message_json};
-
+    use anyhow::{Result, anyhow};
     #[test]
     fn escapes_mrkdwn_control_characters() {
         assert_eq!(
@@ -402,11 +400,11 @@ mod tests {
     }
 
     #[test]
-    fn retries_a_rejected_message_without_images() -> Result<(), String> {
+    fn retries_a_rejected_message_without_images() -> Result<()> {
         let (url, sink) = run_sink(vec![400, 200])?;
         Sender::with_sleep(url, |_| {}).send(&[listing_with_image()], &[], &RouteMap::new())?;
 
-        let bodies = sink.join().map_err(|_| "sink panicked")?;
+        let bodies = sink.join().map_err(|_| anyhow!("sink panicked"))?;
         assert_eq!(bodies.len(), 2);
         assert!(
             bodies
@@ -422,30 +420,30 @@ mod tests {
     }
 
     #[test]
-    fn reports_rejections_with_slacks_reason() -> Result<(), String> {
+    fn reports_rejections_with_slacks_reason() -> Result<()> {
         let (url, sink) = run_sink(vec![400, 400])?;
         let result =
             Sender::with_sleep(url, |_| {}).send(&[listing_with_image()], &[], &RouteMap::new());
 
-        assert!(result.is_err_and(|error| error.contains("invalid_blocks")));
-        assert_eq!(sink.join().map_err(|_| "sink panicked")?.len(), 2);
+        assert!(result.is_err_and(|error| format!("{error:#}").contains("invalid_blocks")));
+        assert_eq!(sink.join().map_err(|_| anyhow!("sink panicked"))?.len(), 2);
         Ok(())
     }
 
     #[test]
-    fn waits_out_rate_limits_and_resends_with_images() -> Result<(), String> {
+    fn waits_out_rate_limits_and_resends_with_images() -> Result<()> {
         let (url, sink) = run_sink(vec![429, 429, 200])?;
 
         Sender::with_sleep(url, |_| {}).send(&[listing_with_image()], &[], &RouteMap::new())?;
 
-        let bodies = sink.join().map_err(|_| "sink panicked")?;
+        let bodies = sink.join().map_err(|_| anyhow!("sink panicked"))?;
         assert_eq!(bodies.len(), 3);
         assert!(bodies.iter().all(|body| body.contains("image_url")));
         Ok(())
     }
 
     #[test]
-    fn gives_up_after_repeated_rate_limits() -> Result<(), String> {
+    fn gives_up_after_repeated_rate_limits() -> Result<()> {
         let (url, sink) = run_sink(vec![429; 4])?;
 
         let result =
@@ -454,7 +452,7 @@ mod tests {
         assert!(result.is_err());
         // 1 attempt + 3 rate-limit retries; no image-less retry, because
         // images weren't the problem.
-        assert_eq!(sink.join().map_err(|_| "sink panicked")?.len(), 4);
+        assert_eq!(sink.join().map_err(|_| anyhow!("sink panicked"))?.len(), 4);
         Ok(())
     }
 }

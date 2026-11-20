@@ -1,3 +1,4 @@
+use anyhow::{Context as _, Result};
 use nanoserde::DeJson;
 use reqwest::blocking::Client;
 
@@ -162,14 +163,13 @@ fn listing_url(section: &str, seo_friendly_path: &str, listing_id: u64) -> Strin
     }
 }
 
-fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
+fn parse_next_page_data(html: &str) -> Result<NextPageData> {
     let json = next_data::json_from_html(html)?;
 
-    NextPageData::deserialize_json(&json)
-        .map_err(|e| format!("Failed to parse __NEXT_DATA__ JSON: {e}"))
+    NextPageData::deserialize_json(&json).context("Failed to parse __NEXT_DATA__ JSON")
 }
 
-pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
+pub(crate) fn search_api_url(html: &str) -> Result<String> {
     let page_data = parse_next_page_data(html)?;
 
     let route = next_data::data_route(&page_data.page, &page_data.query.rest);
@@ -192,18 +192,18 @@ pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
     Ok(url)
 }
 
-pub(crate) fn build_id_from_html(html: &str) -> Result<String, String> {
+pub(crate) fn build_id_from_html(html: &str) -> Result<String> {
     let json = next_data::json_from_html(html)?;
 
     BuildIdData::deserialize_json(&json)
         .map(|data| data.build_id)
-        .map_err(|error| format!("Failed to parse __NEXT_DATA__ build ID: {error}"))
+        .context("Failed to parse __NEXT_DATA__ build ID")
 }
 
-pub(crate) fn property_details_url(build_id: &str, listing: &Listing) -> Result<String, String> {
+pub(crate) fn property_details_url(build_id: &str, listing: &Listing) -> Result<String> {
     let address = Some(next_data::slug_from_path(&listing.link))
         .filter(|address| !address.is_empty())
-        .ok_or_else(|| format!("Could not extract address from {}", listing.link))?;
+        .with_context(|| format!("Could not extract address from {}", listing.link))?;
     let property_type = if listing.detail_property_type.is_empty() {
         "houses-to-let"
     } else {
@@ -216,9 +216,9 @@ pub(crate) fn property_details_url(build_id: &str, listing: &Listing) -> Result<
     ))
 }
 
-pub(crate) fn extract_details_from_json(json: &str) -> Result<ListingDetails, String> {
-    let data: PropertyData = PropertyData::deserialize_json(json)
-        .map_err(|error| format!("Failed to parse property JSON: {error}"))?;
+pub(crate) fn extract_details_from_json(json: &str) -> Result<ListingDetails> {
+    let data: PropertyData =
+        PropertyData::deserialize_json(json).context("Failed to parse property JSON")?;
     let mut details = ListingDetails::default();
 
     for item in data.page_props.listing.property_overview {
@@ -247,9 +247,9 @@ pub(crate) fn extract_details_from_json(json: &str) -> Result<ListingDetails, St
     Ok(details)
 }
 
-pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
+pub(crate) fn extract_page_from_json(json: &str) -> Result<Page> {
     let data: SearchData =
-        SearchData::deserialize_json(json).map_err(|e| format!("Failed to parse API JSON: {e}"))?;
+        SearchData::deserialize_json(json).context("Failed to parse API JSON")?;
     let SearchPageProps {
         listings,
         property_type,
@@ -268,7 +268,7 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
 
 /// Fetches every results page for a rent.ie search URL. Also returns the
 /// Next.js build ID, which is needed for property-detail requests.
-pub(crate) fn fetch_listings(search_url: &str) -> Result<(Vec<Listing>, String), String> {
+pub(crate) fn fetch_listings(search_url: &str) -> Result<(Vec<Listing>, String)> {
     // `_next/data` URLs include a deployment-specific build ID that is only
     // published in the search page's `__NEXT_DATA__` metadata.
     let client = Client::new();
@@ -276,8 +276,7 @@ pub(crate) fn fetch_listings(search_url: &str) -> Result<(Vec<Listing>, String),
     let html = http::send_text(client.get(search_url), "rent.ie search page")?;
 
     let build_id = build_id_from_html(&html)?;
-    let api_url =
-        search_api_url(&html).map_err(|e| format!("Failed to build rent.ie API URL: {e}"))?;
+    let api_url = search_api_url(&html).context("Failed to build rent.ie API URL")?;
 
     // rent.ie ignores pageSize/page_size, so paging is the only way to fetch
     // more than the first 20 results.
@@ -287,23 +286,19 @@ pub(crate) fn fetch_listings(search_url: &str) -> Result<(Vec<Listing>, String),
         println!("Fetching rent.ie listings from API...");
         let json = http::send_text(client.get(page_url), "rent.ie listings")?;
         extract_page_from_json(&json)
-            .map_err(|e| format!("Failed to extract rent.ie listings from API response: {e}"))
+            .context("Failed to extract rent.ie listings from API response")
     })?;
 
     Ok((listings, build_id))
 }
 
 /// Reads the current Next.js build ID from the rent.ie homepage.
-pub(crate) fn fetch_build_id() -> Result<String, String> {
+pub(crate) fn fetch_build_id() -> Result<String> {
     let html = http::send_text(Client::new().get(RENT_IE_BASE_URL), "rent.ie homepage")?;
     build_id_from_html(&html)
 }
 
-fn fetch_details(
-    client: &Client,
-    build_id: &str,
-    listing: &Listing,
-) -> Result<ListingDetails, String> {
+fn fetch_details(client: &Client, build_id: &str, listing: &Listing) -> Result<ListingDetails> {
     let url = property_details_url(build_id, listing)?;
     let json = http::send_text(
         client.get(url).header("accept", "application/json"),
@@ -323,7 +318,7 @@ pub(crate) fn add_listing_details(listings: &mut [Listing], build_id: &str) {
         match fetch_details(&client, build_id, listing) {
             Ok(details) => listing.details = details,
             Err(error) => eprintln!(
-                "Failed to fetch property details for {}: {error}",
+                "Failed to fetch property details for {}: {error:#}",
                 listing.id
             ),
         }
@@ -340,7 +335,7 @@ mod tests {
         build_id_from_html, extract_details_from_json, extract_page_from_json, listing_url,
         search_api_url,
     };
-
+    use anyhow::{Context as _, Result, bail};
     const PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html>
 <head>
@@ -358,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_the_search_api_url_from_page_data() -> Result<(), String> {
+    fn builds_the_search_api_url_from_page_data() -> Result<()> {
         assert_eq!(
             search_api_url(PAGE_HTML)?,
             "https://www.rent.ie/_next/data/test-build/search/waterford-city-centre/room-type_either/sort-by_date-entered_down.json?propertyType=rooms-to-rent&county=waterford&areaFamily=locality&rest=waterford-city-centre&rest=room-type_either&rest=sort-by_date-entered_down"
@@ -368,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_api_urls_for_houses_and_rooms_searches() -> Result<(), String> {
+    fn builds_api_urls_for_houses_and_rooms_searches() -> Result<()> {
         let houses_html = page_html(
             r#"{"propertyType":"houses-to-let","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre"]}"#,
         );
@@ -389,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_api_urls_with_max_rent_filters() -> Result<(), String> {
+    fn builds_api_urls_with_max_rent_filters() -> Result<()> {
         let houses_html = page_html(
             r#"{"propertyType":"houses-to-let","county":"waterford","areaFamily":"renting","rest":["waterford-city-centre","rent_0-650"]}"#,
         );
@@ -410,12 +405,12 @@ mod tests {
     }
 
     #[test]
-    fn extracts_listing_from_api_json() -> Result<(), String> {
+    fn extracts_listing_from_api_json() -> Result<()> {
         let (listings, _) = extract_page_from_json(SEARCH_JSON)?;
         assert_eq!(listings.len(), 1);
 
         let Some(listing) = listings.first() else {
-            return Err("expected one listing".to_string());
+            bail!("expected one listing");
         };
 
         assert_eq!(listing.id, "6721798");
@@ -436,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_build_id_and_property_details() -> Result<(), String> {
+    fn extracts_build_id_and_property_details() -> Result<()> {
         assert_eq!(build_id_from_html(PAGE_HTML)?, "test-build");
 
         let details = extract_details_from_json(
@@ -453,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_the_next_page_from_paging() -> Result<(), String> {
+    fn extracts_the_next_page_from_paging() -> Result<()> {
         let json = r#"{"pageProps":{"propertyType":"rooms-to-rent","paging":{"currentPage":2,"totalPages":3},"listings":[]}}"#;
         let (_, next_page) = extract_page_from_json(json)?;
         assert_eq!(next_page, Some(3));
@@ -484,7 +479,7 @@ mod tests {
 
     #[test]
     #[ignore = "uses the local archives/ fixtures"]
-    fn parses_archived_search_responses() -> Result<(), String> {
+    fn parses_archived_search_responses() -> Result<()> {
         let cases = [
             (
                 "archives/rentie/search_waterford_city_centre.json",
@@ -525,12 +520,12 @@ mod tests {
 
         for (path, expected_count, expected_id, expected_prefix, expected_description) in cases {
             let json =
-                std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
+                std::fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?;
             let (listings, _) = extract_page_from_json(&json)?;
 
             assert_eq!(listings.len(), expected_count, "{path}");
             let Some(first) = listings.first() else {
-                return Err(format!("expected listings in {path}"));
+                bail!("expected listings in {path}");
             };
             assert_eq!(first.id, expected_id, "{path}");
             assert!(first.link.starts_with(expected_prefix), "{path}");
@@ -541,7 +536,7 @@ mod tests {
         let page_two = std::fs::read_to_string(
             "archives/rentie/search_waterford_city_centre_houses_to_let_page_2.json",
         )
-        .map_err(|e| format!("failed to read rent.ie page 2 fixture: {e}"))?;
+        .context("failed to read rent.ie page 2 fixture")?;
         let (listings, next_page) = extract_page_from_json(&page_two)?;
         assert_eq!(listings.len(), 20);
         assert_eq!(next_page, Some(3));
@@ -551,9 +546,9 @@ mod tests {
 
     #[test]
     #[ignore = "uses the local archives/ fixtures"]
-    fn parses_archived_paginated_search_and_details() -> Result<(), String> {
+    fn parses_archived_paginated_search_and_details() -> Result<()> {
         let read = |path: &str| {
-            std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))
+            std::fs::read_to_string(path).with_context(|| format!("failed to read {path}"))
         };
         let (page_one, next_page) = extract_page_from_json(&read(
             "archives/rentie/search_waterford_city_centre_houses_rent_0-1800_page_1.json",
@@ -561,7 +556,7 @@ mod tests {
         assert_eq!(page_one.len(), 20);
         assert_eq!(next_page, Some(2));
         let Some(first) = page_one.first() else {
-            return Err("expected listings on page 1".to_string());
+            bail!("expected listings on page 1");
         };
         assert_eq!(first.id, "6720949");
         assert_eq!(first.bedrooms, Some(3));

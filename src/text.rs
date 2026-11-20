@@ -1,3 +1,4 @@
+use anyhow::{Context as _, Result};
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -172,20 +173,21 @@ fn report_filename() -> String {
     filename_from_seconds(seconds)
 }
 
-pub(crate) fn write_report(dir: &str, listings: &[Listing]) -> Result<String, String> {
+pub(crate) fn write_report(dir: &str, listings: &[Listing]) -> Result<String> {
     let directory = Path::new(dir);
     fs::create_dir_all(directory)
-        .map_err(|error| format!("Failed to create report directory {dir}: {error}"))?;
+        .with_context(|| format!("Failed to create report directory {dir}"))?;
 
     let path = directory.join(report_filename());
     fs::write(&path, generate(listings))
-        .map_err(|error| format!("Failed to write report to {}: {error}", path.display()))?;
+        .with_context(|| format!("Failed to write report to {}", path.display()))?;
 
     Ok(path.display().to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    use anyhow::{Context as _, Result};
     use std::path::Path;
 
     use tempfile::tempdir;
@@ -225,12 +227,12 @@ mod tests {
     }
 
     #[test]
-    fn writes_timestamped_report_into_directory() -> Result<(), String> {
-        let directory = tempdir().map_err(|error| format!("failed to create temp dir: {error}"))?;
+    fn writes_timestamped_report_into_directory() -> Result<()> {
+        let directory = tempdir().context("failed to create temp dir")?;
         let directory_path = directory
             .path()
             .to_str()
-            .ok_or_else(|| "temp directory is not valid UTF-8".to_string())?;
+            .context("temp directory is not valid UTF-8")?;
 
         let path = write_report(directory_path, &[])?;
 

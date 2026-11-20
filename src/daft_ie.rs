@@ -1,3 +1,4 @@
+use anyhow::{Context as _, Result};
 use nanoserde::DeJson;
 use reqwest::blocking::Client;
 
@@ -140,9 +141,9 @@ fn absolute_url(path: &str) -> String {
     }
 }
 
-pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
-    let data: SearchData = SearchData::deserialize_json(json)
-        .map_err(|e| format!("Failed to parse daft.ie API JSON: {e}"))?;
+pub(crate) fn extract_page_from_json(json: &str) -> Result<Page> {
+    let data: SearchData =
+        SearchData::deserialize_json(json).context("Failed to parse daft.ie API JSON")?;
 
     let next_from = data.paging.and_then(|paging| {
         (paging.next_from > 0 && paging.displaying_to < paging.total_results)
@@ -234,19 +235,19 @@ fn find_key(json: &str, key: &str) -> Option<usize> {
 /// Sets `paging.from` in the top-level `paging` object of a daft.ie request
 /// body, inserting it if absent. Other `from` fields (e.g. in `ranges`) are
 /// never touched.
-pub(crate) fn request_body_with_offset(request_body: &str, offset: u32) -> Result<String, String> {
+pub(crate) fn request_body_with_offset(request_body: &str, offset: u32) -> Result<String> {
     let paging_start = find_key(request_body, "paging")
         .filter(|&start| request_body.as_bytes().get(start) == Some(&b'{'))
-        .ok_or("daft.ie request body has no top-level paging object")?;
+        .context("daft.ie request body has no top-level paging object")?;
     let paging_end =
-        value_end(request_body, paging_start).ok_or("unterminated daft.ie paging object")?;
+        value_end(request_body, paging_start).context("unterminated daft.ie paging object")?;
     let paging = request_body
         .get(paging_start..paging_end)
-        .ok_or("invalid daft.ie paging object")?;
+        .context("invalid daft.ie paging object")?;
 
     let (value_start, value_end) = match find_key(paging, "from") {
         Some(from) => {
-            let end = value_end(paging, from).ok_or("unterminated daft.ie paging offset")?;
+            let end = value_end(paging, from).context("unterminated daft.ie paging offset")?;
             (paging_start + from, paging_start + end)
         }
         None => (paging_start + 1, paging_start + 1),
@@ -262,22 +263,22 @@ pub(crate) fn request_body_with_offset(request_body: &str, offset: u32) -> Resul
 
     let before = request_body
         .get(..value_start)
-        .ok_or("invalid daft.ie paging offset")?;
+        .context("invalid daft.ie paging offset")?;
     let after = request_body
         .get(value_end..)
-        .ok_or("invalid daft.ie paging offset")?;
+        .context("invalid daft.ie paging offset")?;
     Ok(format!("{before}{replacement}{after}"))
 }
 
 /// Fetches every results page for a daft.ie gateway request body.
-pub(crate) fn fetch_listings(request_body: &str) -> Result<Vec<Listing>, String> {
+pub(crate) fn fetch_listings(request_body: &str) -> Result<Vec<Listing>> {
     let client = Client::new();
 
     http::paginate(|offset| {
         let body = match offset {
             None => request_body.to_string(),
             Some(offset) => request_body_with_offset(request_body, offset)
-                .map_err(|e| format!("Failed to update daft.ie paging: {e}"))?,
+                .context("Failed to update daft.ie paging")?,
         };
 
         println!("Fetching daft.ie listings from API...");
@@ -294,23 +295,23 @@ pub(crate) fn fetch_listings(request_body: &str) -> Result<Vec<Listing>, String>
             .body(body);
         let json = http::send_text(request, "daft.ie listings")?;
         extract_page_from_json(&json)
-            .map_err(|e| format!("Failed to extract daft.ie listings from API response: {e}"))
+            .context("Failed to extract daft.ie listings from API response")
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{extract_page_from_json, request_body_with_offset};
-
+    use anyhow::{Context as _, Result, bail};
     const SEARCH_JSON: &str = r#"{"listings":[{"listing":{"id":6710820,"title":"Rockshire Road, Ferrybank, Co. Waterford","price":"€1,800 per month","numBedrooms":"2 Bed","numBathrooms":"1 Bath","propertyType":"Apartment","media":{"images":[{"size720x480":"https://media.daft.ie/example.jpg","size72x52":"https://media.daft.ie/thumb.jpg"}]},"seoFriendlyPath":"/for-rent/rockshire-road-ferrybank-co-waterford/6710820","publishDate":1794576513203}}]}"#;
 
     #[test]
-    fn extracts_listing_from_api_json() -> Result<(), String> {
+    fn extracts_listing_from_api_json() -> Result<()> {
         let (listings, _) = extract_page_from_json(SEARCH_JSON)?;
         assert_eq!(listings.len(), 1);
 
         let Some(listing) = listings.first() else {
-            return Err("expected one listing".to_string());
+            bail!("expected one listing");
         };
 
         assert_eq!(listing.id, "6710820");
@@ -328,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn updates_the_request_body_paging_offset() -> Result<(), String> {
+    fn updates_the_request_body_paging_offset() -> Result<()> {
         let body = r#"{"section":"residential-to-rent","paging":{"from":"0","pageSize":"200"},"terms":""}"#;
         assert_eq!(
             request_body_with_offset(body, 20)?,
@@ -339,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn only_rewrites_the_top_level_paging_from() -> Result<(), String> {
+    fn only_rewrites_the_top_level_paging_from() -> Result<()> {
         let body = r#"{"terms":"\"paging\": {\"from\": 1}","paging":{"pageSize":"50"},"ranges":[{"from":"0","to":"1800","name":"rentalPrice"}]}"#;
         assert_eq!(
             request_body_with_offset(body, 50)?,
@@ -362,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_the_next_offset_from_paging() -> Result<(), String> {
+    fn extracts_the_next_offset_from_paging() -> Result<()> {
         let json =
             r#"{"listings":[],"paging":{"nextFrom":20,"displayingTo":20,"totalResults":24}}"#;
         assert_eq!(extract_page_from_json(json)?.1, Some(20));
@@ -375,14 +376,14 @@ mod tests {
 
     #[test]
     #[ignore = "uses the local archives/ fixture"]
-    fn parses_archived_search_response() -> Result<(), String> {
+    fn parses_archived_search_response() -> Result<()> {
         let json = std::fs::read_to_string("archives/daftie/listings.json")
-            .map_err(|e| format!("failed to read archived daft.ie API response: {e}"))?;
+            .context("failed to read archived daft.ie API response")?;
         let (listings, _) = extract_page_from_json(&json)?;
 
         assert_eq!(listings.len(), 20);
         let Some(first) = listings.first() else {
-            return Err("expected at least one listing".to_string());
+            bail!("expected at least one listing");
         };
         assert_eq!(first.id, "6710820");
         assert_eq!(
@@ -397,7 +398,7 @@ mod tests {
 
         let large_page_json =
             std::fs::read_to_string("archives/daftie/listings_page_size_200.json")
-                .map_err(|e| format!("failed to read daft.ie 200-page fixture: {e}"))?;
+                .context("failed to read daft.ie 200-page fixture")?;
         let (listings, next_from) = extract_page_from_json(&large_page_json)?;
         assert_eq!(listings.len(), 24);
         assert_eq!(next_from, None);
@@ -407,9 +408,9 @@ mod tests {
 
     #[test]
     #[ignore = "uses the local archives/ fixtures"]
-    fn parses_archived_paginated_search() -> Result<(), String> {
+    fn parses_archived_paginated_search() -> Result<()> {
         let read = |path: &str| {
-            std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))
+            std::fs::read_to_string(path).with_context(|| format!("failed to read {path}"))
         };
         let (page_one, next_from) = extract_page_from_json(&read(
             "archives/daftie/residential_waterford_city_rent_0-1800_page_1.json",

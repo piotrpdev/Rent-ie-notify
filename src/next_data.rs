@@ -1,5 +1,6 @@
 //! Helpers shared by the Next.js sites (rent.ie and property.ie).
 
+use anyhow::{Context as _, Result};
 use nanoserde::DeJson;
 use tl::{Node, ParserOptions};
 
@@ -22,16 +23,15 @@ impl Paging {
 }
 
 /// Returns the JSON text of the page's `<script id="__NEXT_DATA__">`.
-pub(crate) fn json_from_html(html: &str) -> Result<String, String> {
-    let dom = tl::parse(html, ParserOptions::default())
-        .map_err(|error| format!("Failed to parse HTML: {error}"))?;
+pub(crate) fn json_from_html(html: &str) -> Result<String> {
+    let dom = tl::parse(html, ParserOptions::default()).context("Failed to parse HTML")?;
 
     let script = dom
         .query_selector(NEXT_DATA_SELECTOR)
         .and_then(|mut selector| selector.next())
         .and_then(|node_handle| node_handle.get(dom.parser()))
         .and_then(Node::as_tag)
-        .ok_or("Failed to find __NEXT_DATA__ script in HTML")?;
+        .context("Failed to find __NEXT_DATA__ script in HTML")?;
 
     Ok(script.inner_text(dom.parser()).to_string())
 }

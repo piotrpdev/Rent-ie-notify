@@ -1,3 +1,4 @@
+use anyhow::{Context as _, Result, bail};
 use std::collections::HashMap;
 
 use nanoserde::{DeJson, SerJson};
@@ -32,7 +33,7 @@ struct MatrixResponse {
     distances: Vec<Vec<Option<f64>>>,
 }
 
-fn fetch_batch(listings: &[&Listing], places: &[Place], api_key: &str) -> Result<RouteMap, String> {
+fn fetch_batch(listings: &[&Listing], places: &[Place], api_key: &str) -> Result<RouteMap> {
     let mut locations = Vec::with_capacity(listings.len() + places.len());
 
     for listing in listings {
@@ -59,26 +60,20 @@ fn fetch_batch(listings: &[&Listing], places: &[Place], api_key: &str) -> Result
         .header("Content-Type", "application/json")
         .body(body)
         .send()
-        .map_err(|error| {
-            format!(
-                "OpenRouteService request failed: {}",
-                crate::http::describe_error(error)
-            )
-        })?;
+        .map_err(crate::http::without_url)
+        .context("OpenRouteService request failed")?;
 
     let status = response.status().as_u16();
     if status != 200 {
-        return Err(format!("OpenRouteService returned status {status}"));
+        bail!("OpenRouteService returned status {status}");
     }
 
-    let json = response.text().map_err(|error| {
-        format!(
-            "Failed to read OpenRouteService response: {}",
-            crate::http::describe_error(error)
-        )
-    })?;
+    let json = response
+        .text()
+        .map_err(crate::http::without_url)
+        .context("Failed to read OpenRouteService response")?;
     let data: MatrixResponse = MatrixResponse::deserialize_json(&json)
-        .map_err(|error| format!("Failed to parse OpenRouteService response: {error}"))?;
+        .context("Failed to parse OpenRouteService response")?;
 
     let mut routes = RouteMap::new();
 
@@ -140,7 +135,7 @@ pub(crate) fn fetch_routes(listings: &[Listing], places: &[Place], api_key: &str
         match fetch_batch(batch, places, api_key) {
             Ok(batch_routes) => routes.extend(batch_routes),
             Err(error) => eprintln!(
-                "Failed to fetch drive times from OpenRouteService: {error}; using straight-line fallback for this batch."
+                "Failed to fetch drive times from OpenRouteService: {error:#}; using straight-line fallback for this batch."
             ),
         }
 

@@ -1,3 +1,4 @@
+use anyhow::{Context as _, Result, bail};
 use nanoserde::DeJson;
 
 use crate::listing::Coordinates;
@@ -18,27 +19,27 @@ struct PlaceConfig {
     longitude: f64,
 }
 
-pub(crate) fn parse(value: &str) -> Result<Vec<Place>, String> {
+pub(crate) fn parse(value: &str) -> Result<Vec<Place>> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(Vec::new());
     }
 
-    let configs: Vec<PlaceConfig> = Vec::deserialize_json(value)
-        .map_err(|error| format!("Failed to parse {ENV_VAR} JSON: {error}"))?;
+    let configs: Vec<PlaceConfig> =
+        Vec::deserialize_json(value).with_context(|| format!("Failed to parse {ENV_VAR} JSON"))?;
     let mut places = Vec::with_capacity(configs.len());
 
     for config in configs {
         if config.name.trim().is_empty() {
-            return Err(format!("{ENV_VAR} contains a place with an empty name"));
+            bail!("{ENV_VAR} contains a place with an empty name");
         }
         if !(-90.0..=90.0).contains(&config.latitude)
             || !(-180.0..=180.0).contains(&config.longitude)
         {
-            return Err(format!(
+            bail!(
                 "{ENV_VAR} contains invalid coordinates for '{}'",
                 config.name
-            ));
+            );
         }
         places.push(Place {
             name: config.name,
@@ -82,9 +83,9 @@ pub(crate) fn format_distance(distance_km: f64) -> String {
 mod tests {
     use super::{Place, distance_km, format_distance, parse};
     use crate::listing::Coordinates;
-
+    use anyhow::{Result, bail};
     #[test]
-    fn parses_places_and_distances() -> Result<(), String> {
+    fn parses_places_and_distances() -> Result<()> {
         let places = parse(
             r#"[{"name":"Work","latitude":52.244898,"longitude":-7.159315},{"name":"Geoff's","latitude":52.258076,"longitude":-7.111913}]"#,
         )?;
@@ -100,7 +101,7 @@ mod tests {
         );
 
         let Some(work) = places.first() else {
-            return Err("expected Work place".to_string());
+            bail!("expected Work place");
         };
         let distance = distance_km(
             Coordinates {

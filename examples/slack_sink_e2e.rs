@@ -5,9 +5,7 @@
 //! program runs in a temporary directory, so the real `sent_ids.txt` is untouched.
 
 use std::{
-    env,
-    error::Error,
-    fs,
+    env, fs,
     net::TcpListener,
     path::PathBuf,
     process::{Command, ExitCode},
@@ -19,6 +17,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::{Context as _, Result, anyhow, bail};
 use nanoserde::DeJson;
 use tempfile::tempdir;
 use tiny_http::{Response, Server};
@@ -62,20 +61,20 @@ struct Config {
     with_routing: bool,
 }
 
-fn default_binary() -> Result<PathBuf, Box<dyn Error>> {
+fn default_binary() -> Result<PathBuf> {
     let current_exe = env::current_exe()?;
     let examples_dir = current_exe
         .parent()
-        .ok_or_else(|| "failed to locate example directory".to_string())?;
+        .context("failed to locate example directory")?;
     let profile_dir = examples_dir
         .parent()
-        .ok_or_else(|| "failed to locate target profile directory".to_string())?;
+        .context("failed to locate target profile directory")?;
     let binary_name = format!("Rent-ie-notify{}", env::consts::EXE_SUFFIX);
 
     Ok(profile_dir.join(binary_name))
 }
 
-fn parse_args() -> Result<Option<Config>, Box<dyn Error>> {
+fn parse_args() -> Result<Option<Config>> {
     let mut binary = default_binary()?;
     let mut rent_url = env::var("RENT_IE_URL")
         .ok()
@@ -93,48 +92,33 @@ fn parse_args() -> Result<Option<Config>, Box<dyn Error>> {
         match argument.as_str() {
             "-h" | "--help" => return Ok(None),
             "--binary" => {
-                binary = PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| "--binary requires a path".to_string())?,
-                );
+                binary = PathBuf::from(args.next().context("--binary requires a path")?);
             }
             "--rent-url" => {
-                rent_url = Some(
-                    args.next()
-                        .ok_or_else(|| "--rent-url requires a URL".to_string())?,
-                );
+                rent_url = Some(args.next().context("--rent-url requires a URL")?);
             }
             "--daft-request" => {
-                daft_request = Some(
-                    args.next()
-                        .ok_or_else(|| "--daft-request requires a JSON body".to_string())?,
-                );
+                daft_request = Some(args.next().context("--daft-request requires a JSON body")?);
             }
             "--daft-request-file" => {
-                let path = args
-                    .next()
-                    .ok_or_else(|| "--daft-request-file requires a path".to_string())?;
-                let body = fs::read_to_string(&path)
-                    .map_err(|error| format!("failed to read {path}: {error}"))?;
+                let path = args.next().context("--daft-request-file requires a path")?;
+                let body =
+                    fs::read_to_string(&path).with_context(|| format!("failed to read {path}"))?;
                 daft_request = Some(body.trim().to_string());
             }
             "--property-url" => {
-                property_url = Some(
-                    args.next()
-                        .ok_or_else(|| "--property-url requires a URL".to_string())?,
-                );
+                property_url = Some(args.next().context("--property-url requires a URL")?);
             }
             "--with-routing" => with_routing = true,
-            other => return Err(format!("unknown argument: {other}").into()),
+            other => bail!("unknown argument: {other}"),
         }
     }
 
     if !binary.is_file() {
-        return Err(format!(
+        bail!(
             "binary not found: {} (run cargo build --locked)",
             binary.display()
-        )
-        .into());
+        );
     }
 
     Ok(Some(Config {
@@ -161,11 +145,11 @@ fn summarize_slack_payload(body: &[u8]) -> Option<(usize, usize)> {
 fn run_slack_sink(
     received: &Arc<Mutex<Vec<Vec<u8>>>>,
     shutdown: &Arc<AtomicBool>,
-) -> Result<(u16, thread::JoinHandle<()>), Box<dyn Error>> {
+) -> Result<(u16, thread::JoinHandle<()>)> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     let server = Server::from_listener(listener, None)
-        .map_err(|error| format!("failed to start Slack sink: {error}"))?;
+        .map_err(|error| anyhow!("failed to start Slack sink: {error}"))?;
     let server = Arc::new(server);
     let thread_server = Arc::clone(&server);
     let thread_received = Arc::clone(received);
@@ -192,15 +176,15 @@ fn run_slack_sink(
     Ok((port, handle))
 }
 
-fn run() -> Result<bool, Box<dyn Error>> {
+fn run() -> Result<bool> {
     let Some(config) = parse_args()? else {
         print!("{USAGE}");
         return Ok(true);
     };
 
     if config.rent_url.is_none() && config.daft_request.is_none() && config.property_url.is_none() {
-        return Err(
-            "set RENT_IE_URL, DAFT_IE_REQUEST, and/or PROPERTY_IE_URL, or pass --rent-url/--daft-request-file/--property-url".into(),
+        bail!(
+            "set RENT_IE_URL, DAFT_IE_REQUEST, and/or PROPERTY_IE_URL, or pass --rent-url/--daft-request-file/--property-url"
         );
     }
 
@@ -209,7 +193,7 @@ fn run() -> Result<bool, Box<dyn Error>> {
             env::var("OPENROUTESERVICE_API_KEY")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
-                .ok_or("--with-routing requires OPENROUTESERVICE_API_KEY")?,
+                .context("--with-routing requires OPENROUTESERVICE_API_KEY")?,
         )
     } else {
         None
@@ -264,7 +248,7 @@ fn run() -> Result<bool, Box<dyn Error>> {
 
     let bodies = received
         .lock()
-        .map_err(|_| "Slack sink mutex poisoned".to_string())?;
+        .map_err(|_| anyhow!("Slack sink mutex poisoned"))?;
     println!("Slack requests: {}", bodies.len());
     for (index, body) in bodies.iter().enumerate() {
         match summarize_slack_payload(body) {
@@ -287,7 +271,7 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(error) => {
-            eprintln!("Error: {error}");
+            eprintln!("Error: {error:#}");
             ExitCode::FAILURE
         }
     }

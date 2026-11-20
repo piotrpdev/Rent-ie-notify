@@ -1,3 +1,4 @@
+use anyhow::{Context as _, Result};
 use nanoserde::DeJson;
 use reqwest::blocking::Client;
 
@@ -128,14 +129,13 @@ fn listing_url(ad_type: &str, seo_friendly_path: &str, listing_id: u64) -> Strin
     format!("{PROPERTY_IE_BASE_URL}/{ad_type}/{slug}/{listing_id}/")
 }
 
-fn parse_next_page_data(html: &str) -> Result<NextPageData, String> {
+fn parse_next_page_data(html: &str) -> Result<NextPageData> {
     let json = next_data::json_from_html(html)?;
 
-    NextPageData::deserialize_json(&json)
-        .map_err(|error| format!("Failed to parse __NEXT_DATA__ JSON: {error}"))
+    NextPageData::deserialize_json(&json).context("Failed to parse __NEXT_DATA__ JSON")
 }
 
-pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
+pub(crate) fn search_api_url(html: &str) -> Result<String> {
     let page_data = parse_next_page_data(html)?;
     let route = next_data::data_route(&page_data.page, &page_data.query.rest);
 
@@ -152,9 +152,9 @@ pub(crate) fn search_api_url(html: &str) -> Result<String, String> {
     Ok(url)
 }
 
-pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
-    let data: SearchData = SearchData::deserialize_json(json)
-        .map_err(|error| format!("Failed to parse property.ie API JSON: {error}"))?;
+pub(crate) fn extract_page_from_json(json: &str) -> Result<Page> {
+    let data: SearchData =
+        SearchData::deserialize_json(json).context("Failed to parse property.ie API JSON")?;
     let SearchPageProps {
         listings,
         ad_type,
@@ -172,12 +172,12 @@ pub(crate) fn extract_page_from_json(json: &str) -> Result<Page, String> {
 }
 
 /// Fetches every results page for a property.ie search URL.
-pub(crate) fn fetch_listings(search_url: &str) -> Result<Vec<Listing>, String> {
+pub(crate) fn fetch_listings(search_url: &str) -> Result<Vec<Listing>> {
     // property.ie requires HTTP/2; Cloudflare returns 403 for HTTP/1.1 requests.
     let client = Client::builder()
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|error| format!("Failed to create property.ie HTTP client: {error}"))?;
+        .context("Failed to create property.ie HTTP client")?;
 
     println!("Fetching property.ie search page metadata...");
     let request = client
@@ -204,7 +204,7 @@ pub(crate) fn fetch_listings(search_url: &str) -> Result<Vec<Listing>, String> {
 #[cfg(test)]
 mod tests {
     use super::{extract_page_from_json, listing_url, search_api_url};
-
+    use anyhow::{Context as _, Result, bail};
     const PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html>
 <head>
@@ -216,7 +216,7 @@ mod tests {
     const SEARCH_JSON: &str = r#"{"pageProps":{"adType":"property-to-let","paging":{"currentPage":1,"totalPages":2},"listings":[{"listing":{"id":6721266,"title":"Lakunda, West Street, Tallow, Co. Waterford","price":"€1,600 per month","numBedrooms":"4 Bed","numBathrooms":"1 Bath","propertyType":"House","media":{"images":[{"size360x240":"https://media.property.ie/example.jpg"}]},"seoFriendlyPath":"/for-rent/lakunda-west-street-tallow-co-waterford/6721266","publishDate":1794564618513}}]}}"#;
 
     #[test]
-    fn builds_the_property_ie_search_api_url() -> Result<(), String> {
+    fn builds_the_property_ie_search_api_url() -> Result<()> {
         assert_eq!(
             search_api_url(PAGE_HTML)?,
             "https://www.property.ie/_next/data/test-build/search/price_0-3500/beds_4.json?adType=property-to-let&county=waterford&rest=price_0-3500&rest=beds_4"
@@ -237,13 +237,13 @@ mod tests {
     }
 
     #[test]
-    fn extracts_a_property_ie_listing() -> Result<(), String> {
+    fn extracts_a_property_ie_listing() -> Result<()> {
         let (listings, next_page) = extract_page_from_json(SEARCH_JSON)?;
         assert_eq!(listings.len(), 1);
         assert_eq!(next_page, Some(2));
 
         let Some(listing) = listings.first() else {
-            return Err("expected a listing".to_string());
+            bail!("expected a listing");
         };
         assert_eq!(listing.id, "6721266");
         assert_eq!(
@@ -263,9 +263,9 @@ mod tests {
 
     #[test]
     #[ignore = "uses the local archives/ fixtures"]
-    fn parses_archived_search_and_details() -> Result<(), String> {
+    fn parses_archived_search_and_details() -> Result<()> {
         let read = |path: &str| {
-            std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))
+            std::fs::read_to_string(path).with_context(|| format!("failed to read {path}"))
         };
         let (listings, next_page) = extract_page_from_json(&read(
             "archives/propertyie/search_waterford_4beds_0-3500_page_1.json",
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(listings.len(), 18);
         assert_eq!(next_page, None);
         let Some(first) = listings.first() else {
-            return Err("expected listings".to_string());
+            bail!("expected listings");
         };
         assert_eq!(first.id, "6721266");
         assert_eq!(first.bedrooms, Some(4));

@@ -103,7 +103,7 @@ mod tests {
     use crate::listing::{Listing, ListingSource};
     use crate::test_support;
     use crate::{daft_ie, rent_ie};
-
+    use anyhow::{Context as _, Result};
     fn listing(id: &str, image_keys: &[&str], source: ListingSource) -> Listing {
         Listing {
             image_keys: image_keys.iter().map(ToString::to_string).collect(),
@@ -196,15 +196,15 @@ mod tests {
 
     #[test]
     #[ignore = "uses the local archives/ fixtures"]
-    fn groups_archived_cross_site_duplicates() -> Result<(), String> {
+    fn groups_archived_cross_site_duplicates() -> Result<()> {
         let rent_json = std::fs::read_to_string(
             "archives/rentie/search_waterford_city_centre_rent_0-550_page_1.json",
         )
-        .map_err(|error| format!("failed to read rent.ie fixture: {error}"))?;
+        .context("failed to read rent.ie fixture")?;
         let daft_json = std::fs::read_to_string(
             "archives/daftie/sharing_waterford_city_rent_0-550_page_1.json",
         )
-        .map_err(|error| format!("failed to read daft.ie fixture: {error}"))?;
+        .context("failed to read daft.ie fixture")?;
 
         let (rent_listings, _) = rent_ie::extract_page_from_json(&rent_json)?;
         let (daft_listings, _) = daft_ie::extract_page_from_json(&daft_json)?;
