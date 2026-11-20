@@ -6,6 +6,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 
 - `src/main.rs` — orchestration: env vars, concurrent source fetching, grouping, dedupe, property details, Slack POST, state file.
 - `src/next_data.rs` — Next.js helpers shared by rent.ie and property.ie: `__NEXT_DATA__` extraction (via `tl`), `_next/data` route resolution, `Paging`, slug extraction.
+- `src/state.rs` — loads/appends `sent_ids.txt` (legacy ID normalization, `HashSet` lookups).
 - `src/http.rs` — `send_text` (send + status check + body) and `paginate` (sequential page loop with `delay::sleep()`), shared by every source.
 - `src/delay.rs` — jittered delay helper for paginated/detail requests.
 - `src/listing.rs` — shared `Listing` model (detail-endpoint fields nested in `ListingDetails`), coordinates, image-key extraction, and description/date formatting.
@@ -25,7 +26,7 @@ Single-binary Rust app (edition 2024): fetches rent.ie, daft.ie, and/or property
 
 ## Commands
 
-- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (33 unit tests, plus 3 ignored archive-backed tests).
+- Check: `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked` (unit tests plus ignored archive-backed tests).
 - Check everything: `scripts/check.sh` (also runs the archive tests and release build).
 - Archive check: `cargo test --locked -- --ignored` (parses the rent.ie and daft.ie fixtures in `archives/`).
 - Local Slack E2E: `cargo slack-sink-e2e` (uses `RENT_IE_URL`/`DAFT_IE_REQUEST`/`PROPERTY_IE_URL`) or pass `--daft-request-file`; `cargo run --example slack_sink_e2e -- ...` works too. ORS is disabled by default; add `--with-routing` only when testing routing.

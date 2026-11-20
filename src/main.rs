@@ -1,4 +1,4 @@
-use std::{env, fs::OpenOptions, io::Write, thread};
+use std::{collections::HashSet, env, path::Path, thread};
 
 use crate::listing::Listing;
 
@@ -13,25 +13,13 @@ pub mod property_ie;
 pub mod rent_ie;
 pub mod routing;
 pub mod slack;
+pub mod state;
 pub mod text;
 
-const SENT_IDS_FILENAME: &str = "sent_ids.txt";
 const DAFT_IE_REQUEST_ENV: &str = "DAFT_IE_REQUEST";
 // Slack allows at most 50 Block Kit blocks per message. Each listing uses a
 // section plus a divider, so 20 listings is 39 blocks, leaving some headroom.
 const SLACK_LISTINGS_PER_MESSAGE: usize = 20;
-
-fn parse_sent_ids(content: &str) -> Vec<String> {
-    // Older versions stored "<slug>/<id>" and later versions stored daft IDs as
-    // "daft-<id>". Reduce both formats to the shared numeric ID.
-    content
-        .lines()
-        .map(|line| line.trim().rsplit('/').next().unwrap_or_default())
-        .map(|id| id.strip_prefix("daft-").unwrap_or(id))
-        .filter(|id| !id.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
 
 fn fetch_all_sources(
     rent_ie_url: Option<String>,
@@ -215,13 +203,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("Loading already sent listing IDs from file...");
-    let sent_ids = std::fs::read_to_string(SENT_IDS_FILENAME).map_or_else(
-        |_| {
-            eprintln!("{SENT_IDS_FILENAME} not found, assuming no listings have been sent yet.");
-            Vec::new()
-        },
-        |content| parse_sent_ids(&content),
-    );
+    let sent_ids_path = Path::new(state::SENT_IDS_FILENAME);
+    let sent_ids = state::load(sent_ids_path);
 
     let new_groups: Vec<Vec<Listing>> = groups
         .iter()
@@ -255,41 +238,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     send_slack_listings(&slack_webhook_url, &new_listings, &places, &routes)?;
 
-    let mut new_ids = Vec::new();
-    for group in &new_groups {
-        for listing in group {
-            if !new_ids.contains(&listing.id) {
-                new_ids.push(listing.id.clone());
-            }
-        }
-    }
+    let mut seen = HashSet::new();
+    let new_ids: Vec<String> = new_groups
+        .iter()
+        .flatten()
+        .filter(|listing| seen.insert(listing.id.as_str()))
+        .map(|listing| listing.id.clone())
+        .collect();
 
-    println!("Saving sent listing IDs to {SENT_IDS_FILENAME}...");
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(SENT_IDS_FILENAME)
-        .map_err(|e| format!("Failed to open {SENT_IDS_FILENAME}: {e}"))?;
-
-    for id in new_ids {
-        writeln!(file, "{id}")?;
-    }
+    println!("Saving sent listing IDs to {}...", state::SENT_IDS_FILENAME);
+    state::append(sent_ids_path, &new_ids)?;
 
     println!("Done.");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_sent_ids;
-
-    #[test]
-    fn parses_legacy_and_current_listing_ids() {
-        let ids = parse_sent_ids("2-Belvedere-Drive-Waterford/6010625\n6721798\ndaft-6710820\n\n");
-
-        assert_eq!(ids.len(), 3);
-        assert_eq!(ids.first().map(String::as_str), Some("6010625"));
-        assert_eq!(ids.get(1).map(String::as_str), Some("6721798"));
-        assert_eq!(ids.get(2).map(String::as_str), Some("6710820"));
-    }
 }
