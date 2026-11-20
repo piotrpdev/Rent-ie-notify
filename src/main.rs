@@ -224,15 +224,20 @@ fn populate_listing_details(listings: &mut [Listing], rent_build_id: Option<Stri
     }
 }
 
+/// Reads an environment variable, treating unset and blank values alike so an
+/// empty `Environment=RENT_IE_URL=` line disables a source instead of failing it.
+fn env_value(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn max_beds_from_env() -> Result<Option<u32>, String> {
-    match env::var("MAX_BEDS") {
-        Ok(value) if !value.trim().is_empty() => value
-            .trim()
-            .parse::<u32>()
-            .map(Some)
-            .map_err(|error| format!("Invalid MAX_BEDS value: {error}")),
-        _ => Ok(None),
-    }
+    env_value("MAX_BEDS")
+        .map(|value| value.parse::<u32>())
+        .transpose()
+        .map_err(|error| format!("Invalid MAX_BEDS value: {error}"))
 }
 
 fn env_flag(name: &str) -> bool {
@@ -246,16 +251,12 @@ fn env_flag(name: &str) -> bool {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let slack_webhook_url =
-        env::var("SLACK_WEBHOOK_URL").map_err(|_| "Failed to get SLACK_WEBHOOK_URL env var")?;
-    let rent_ie_url = env::var("RENT_IE_URL").ok();
-    let daft_ie_request = env::var(DAFT_IE_REQUEST_ENV).ok();
-    let property_ie_url = env::var("PROPERTY_IE_URL").ok();
-    let ors_api_key = env::var("OPENROUTESERVICE_API_KEY")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let text_report_dir = env::var("TEXT_REPORT_DIR")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
+        env_value("SLACK_WEBHOOK_URL").ok_or("Failed to get SLACK_WEBHOOK_URL env var")?;
+    let rent_ie_url = env_value("RENT_IE_URL");
+    let daft_ie_request = env_value(DAFT_IE_REQUEST_ENV);
+    let property_ie_url = env_value("PROPERTY_IE_URL");
+    let ors_api_key = env_value("OPENROUTESERVICE_API_KEY");
+    let text_report_dir = env_value("TEXT_REPORT_DIR");
     let text_report_include_all = env_flag("TEXT_REPORT_INCLUDE_ALL");
     let max_beds = max_beds_from_env()?;
 
@@ -263,10 +264,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Set RENT_IE_URL, DAFT_IE_REQUEST, and/or PROPERTY_IE_URL".into());
     }
 
-    let places = match env::var(places::ENV_VAR) {
-        Ok(value) => places::parse(&value)
+    let places = match env_value(places::ENV_VAR) {
+        Some(value) => places::parse(&value)
             .map_err(|error| format!("Failed to parse {}: {error}", places::ENV_VAR))?,
-        Err(_) => Vec::new(),
+        None => Vec::new(),
     };
 
     // Load state before fetching so an unreadable file fails fast.
